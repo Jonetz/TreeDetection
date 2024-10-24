@@ -10,7 +10,7 @@ from shapely.geometry import box
 from rasterio.mask import mask
 import shutil
 
-from tree_detection.helpers import delete_contents
+from TreeDetection.helpers import delete_contents
 """
 Tiling orthomosaic data.
 

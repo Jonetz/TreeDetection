@@ -2,10 +2,10 @@ import sys
 import os
 # Add the root project directory to the system path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from tree_detection.config import get_config, setup_model_cfg
-from tree_detection.tiling import tile_data
-from tree_detection.helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents
-from tree_detection.post_performant import process_files_in_directory    
+from TreeDetection.config import get_config, setup_model_cfg
+from TreeDetection.tiling import tile_data
+from TreeDetection.helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents
+from TreeDetection.post_performant import process_files_in_directory    
 
 from detectron2.engine import DefaultPredictor
 from detectron2.evaluation.coco_evaluation import instances_to_coco_json
