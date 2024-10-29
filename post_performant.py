@@ -322,6 +322,7 @@ def update_feature_visualization(updated_features, contained_ids_per_feature, co
     Returns:
         list: Updated features with modified 'visualize' properties.
     """    
+    #TODO Make this new using other features!
     def is_contained(outer_polygon, inner_polygon, threshold=0.9):
         """
         Check if 90% or more of the inner_polygon is contained within the outer_polygon.

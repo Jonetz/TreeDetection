@@ -1,11 +1,13 @@
 import sys
 import os
+
+import torch
 # Add the root project directory to the system path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from TreeDetection.config import get_config, setup_model_cfg
-from TreeDetection.tiling import tile_data
-from TreeDetection.helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents
-from TreeDetection.post_performant import process_files_in_directory    
+from config import get_config, setup_model_cfg
+from tiling import tile_data
+from helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents
+from post_performant import process_files_in_directory    
 
 from detectron2.engine import DefaultPredictor
 from detectron2.evaluation.coco_evaluation import instances_to_coco_json
@@ -15,8 +17,11 @@ from pathlib import Path
 import json, cv2
 import geopandas as gpd
 import shutil
+import typing
 from torch.amp import autocast
+from shapely.geometry import box
 
+gpd.options.display_precision = 2
 
 def postprocess_files(config):
     """
@@ -26,10 +31,43 @@ def postprocess_files(config):
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
                                 confidence_threshold=config['confidence_threshold'], containment_threshold=config['containment_threshold'],\
                                 parallel=True)
+    logger = config["logger"]
     # 2. Filter with exclude outlines
-    # 3. Filter with height threshold use post_performant
-    # 4. Save the final predictions
-    pass
+    exclude_outlines(config)
+
+    # 4. Save the final predictions as gpkg in another folder 
+    for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
+        if not file.endswith('.geojson') or not file.startswith('processed_'):
+            continue
+        crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
+        logger.debug(f" File {file}, # crowns {len(crowns)} ")
+        crowns.to_file(os.path.join(config["output_directory"], file.replace('processed_', '')))
+
+def exclude_outlines(config):
+    for outline in config.get('exclude_files', []):
+        exclude_outline = gpd.read_file(outline)
+
+        for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
+            if not file.endswith('.geojson') or not file.startswith('processed_'):
+                continue
+            file_path = os.path.join(config["output_directory"], 'geojson_predictions', file)
+            crowns = gpd.read_file(file_path)
+            exclude_outline = exclude_outline.to_crs(crowns.crs)
+
+            # Get the bounds of the current crowns GeoDataFrame
+            file_bounds = crowns.total_bounds  # [minx, miny, maxx, maxy]
+
+            # Clip the exclude outline to the bounds of the current file to save computing time
+            exclude_outline_clipped = exclude_outline.clip(
+                box(file_bounds[0], file_bounds[1], file_bounds[2], file_bounds[3])  # Using shapely's box
+            )
+
+            # Check which geometries in 'crowns' are completely within the exclude outline
+            crowns_filtered = crowns[~crowns.geometry.within(exclude_outline_clipped.geometry.union_all())]
+
+            # Write the filtered crowns back to the original path, overwriting the original file
+            crowns_filtered.to_file(file_path, driver='GeoJSON')
+
 
 def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50):
     """
@@ -215,18 +253,52 @@ def process_files(config):
 
     shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
     for folder in os.listdir(config["output_directory"]):        
-        if os.path.exists(folder) and os.path.isdir(folder) and \
-            (os.path.basename(folder) != "geojson_predictions" or os.path.basename(folder) != "logs"):
+        folder = os.path.join(config["output_directory"], folder)
+        if os.path.isdir(folder) and os.path.basename(folder) != "logs" and not config.get('keep_intermediate', False):
             shutil.rmtree(folder)
 
     # Print stats about the processing
+def profile_code(config):
+    """
+    Profile the code to analyze performance using cProfile.
 
+    
+    20241024 Output:
+        1    2.244    2.244   76.155   76.155 /home/jonas/TreeDetection/main.py:24(postprocess_files)
+        1    0.000    0.000   19.579   19.579 /home/jonas/TreeDetection/main.py:211(preprocess_files)
+        1    0.275    0.275  112.214  112.214 /home/jonas/TreeDetection/main.py:151(predict_tiles)
+
+	    2    0.000    0.000   60.746   30.373 /home/jonas/TreeDetection/main.py:70(predict_on_model)
+        2    0.001    0.000   26.859   13.429 /home/jonas/TreeDetection/helpers.py:266(stitch_crowns)        
+	    1    0.000    0.000   19.579   19.579 /home/jonas/TreeDetection/tiling.py:109(tile_data)
+        1    0.242    0.242   14.098   14.098 /home/jonas/TreeDetection/helpers.py:476(fuse_predictions)
+        1    0.000    0.000   11.978   11.978 /home/jonas/TreeDetection/post_performant.py:511(process_files_in_directory)   
+        2    0.001    0.000    9.288    4.644 /home/jonas/TreeDetection/helpers.py:71(project_to_geojson)
+    """
+    import cProfile
+    import pstats
+    import io
+    pr = cProfile.Profile()
+    pr.enable()
+    
+    # Start the processing
+    process_files(config)
+
+    pr.disable()
+    
+    s = io.StringIO()
+    ps = pstats.Stats(pr, stream=s).sort_stats(pstats.SortKey.TIME)
+    ps.print_stats()
+    logger = config.get("logger", None)
+    logger.info(s.getvalue())
+    
 if __name__ == "__main__":
-    config = get_config("/home/jonas/tree_detection/tree_detection/config.yml")
+    config = get_config("/home/jonas/TreeDetection/config.yml")
 
     # Print Information about the configuration
 
     # Start reading the files and validate the configuration
 
     # Start the processing
-    process_files(config)
+    process_files(config)    
+    #profile_code(config)

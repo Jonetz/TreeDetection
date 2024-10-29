@@ -8,8 +8,8 @@ forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # optional if combined
 output_directory: "output"  # default: ./output
 tiles_path: "tiles"  # default: ./tiles
 # continue_path: "/home/jonas/tree_detection/tree_detection/output/continue.yml"  # default: ./output/continue.yml
-image_regex: r"FDOP\d{2}_(\d+)_rgbi\.tif"  # default: ".*_fdop.tif"
-height_data_regex: r"(\d+)\.tif"  # default: ".*_nDSM.tif"
+image_regex: r"FDOP\d{2}_(\d+)_rgbi\.tif"  # default: ".*_fdop.tif" # TODO Implement 
+height_data_regex: r"(\d+)\.tif"  # default: ".*_nDSM.tif"# TODO Implement 
 
 # Tile parameters
 tile_width: 50  # default: 50
@@ -17,10 +17,11 @@ tile_height: 50  # default: 50
 buffer: 20  # default: 0
 
 # Post-processing parameters
-# exclude_files:  # default: []
-#  - "/path/to/exclude_file_1.shp"
-#  - "/path/to/exclude_file_2.shp"
-confidence_threshold: 0.3  # default: 0.3
+exclude_files:  # default: []
+  - "data/BW-Gewaesser/Gewaesserflaechen.shp"
+  - "data/BW-Gewaesser/Gewaesserlinie.shp"
+  - "data/BW-Hausumrisse/gebaeude-bw.shp"
+confidence_threshold: 0.3  # default: 0.3 
 containment_threshold: 0.9  # default: 0.9
 height_threshold: 0  # default: 3
 
@@ -36,4 +37,4 @@ num_workers: 4  # default: 10
 # Logging and debugging
 verbose: False  # default: false
 debug: False  # default: false
-keep_intermediate: True  # default: false TODO there is a bug with this option, since shutil is used asynchroniously 
+keep_intermediate: False  # default: false

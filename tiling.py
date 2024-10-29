@@ -40,6 +40,7 @@ def tile_single_file(
         os.makedirs(out_path, exist_ok=True)
         crs = rasterio.CRS.from_string(data.crs.wkt)
         crs = data.crs.to_epsg()
+        
         tilename = Path(data.name).stem
         # Calculate total tiles accounting for the entire bounds
         total_tiles = int(
@@ -142,9 +143,20 @@ def tile_data(
         raise NotADirectoryError(f"Output directory is not a directory: {out_dir}")
     
     #delete_contents(out_dir, logger=logger)
-    if not os.listdir(out_dir):
-        print(f"Output directory is empty: {out_dir}")
 
+
+    for data_path in file_list:   
+        img_out_dir = os.path.join(out_dir, Path(data_path).stem)
+        tile_single_file(
+                    data_path,
+                    img_out_dir,
+                    buffer,
+                    tile_width,
+                    tile_height,
+                    dtype_bool,
+                    logger
+                )         
+    """
     # Tiles multiple raster files in parallel and saves the output tiles.
     with ProcessPoolExecutor(max_workers=1) as executor:
         for data_path in file_list:            
@@ -170,7 +182,7 @@ def tile_data(
                     logger.error(f"Error processing file: {e}")
                 else:
                     print(f"Error processing file: {e}")
-
+        """
 if __name__ == "__main__":
     # Example usage
     file_list = ["file1.tif", "file2.tif", "file3.tif"]
