@@ -228,9 +228,32 @@ def get_height_within_polygon(polygon, height_data, transform, width, height, bo
                 coordinates.append((x, y))
 
     if not heights:
-        #TODO Implement a more robust method to find the highest point within the polygon (maybe just the centroid?)
-        print('No valid data points found within the polygon.')
-        return -1, None
+        centroid = get_centroid(polygon)
+        centroid = Point(centroid[0]-bounds.left, centroid[1]-bounds.bottom)
+
+        min_dist =  np.finfo(np.float64).max
+        min_row_dist = -1
+        min_col_dist = -1
+        coord_x = -1
+        coord_y = -1
+        for r in range(3):
+            for c in range(3):
+                x, y = raster_to_geo(transform, min_row - 1 + r, min_col - 1 + c)
+                x, y = geo_to_raster(transform, x, y)
+
+                curr_dist = euclidean_distance(centroid, Point(x, 1000 - y))
+                if curr_dist < min_dist:
+                    min_dist = curr_dist
+                    min_row_dist = r
+                    min_col_dist = c
+                    coord_x = x
+                    coord_y = y
+
+        # TODO runden?
+        subset = height_data[min_row - 1:min_row + 2, min_col - 1:min_col + 2]
+        heights.append(subset[min_row_dist, min_col_dist])
+        coordinates.append((coord_x, coord_y))
+
 
     max_height = max(heights)
     max_index = heights.index(max_height)
@@ -250,6 +273,10 @@ def get_centroid(polygon):
     """
     centroid = polygon.centroid
     return (centroid.x, centroid.y)
+
+def euclidean_distance(point1, point2):
+    return np.sqrt(np.power(point1.x-point2.x, 2.0) + np.power(point1.y-point2.y, 2.0))
+
 
 def process_feature(feature, polygon_dict, id_to_area, containment_threshold, height_data, transform, width, height, bounds, spatial_idx):
     """
@@ -518,7 +545,10 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         containment_threshold (float): Threshold for polygon containment.
         parallel (bool): Whether to process files in parallel (default is True).
     """
+
+    print(directory)
     geojson_files = [f for f in os.listdir(directory) if f.endswith('.geojson')]
+
 
     if not parallel:
         for filename in geojson_files:
@@ -576,7 +606,8 @@ if __name__ == "__main__":
     CONFIDENCE_THRESHOLD = 0.3
     CONTAINMENT_THRESHOLD = 0.9
 
-    geojson_directory = '/home/jonas/tree_detection/newAnnos/crowns'
-    height_directory = '/home/jonas/tree_detection/newAnnos/nDSM'
+    geojson_directory = 'output/geojson_predictions'
+    height_directory = 'data/nDSM'
+
 
     process_files_in_directory(geojson_directory, height_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=False)
