@@ -538,11 +538,10 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
                 # Clip the forest shapes only to the extent of the urban shapes
                 urban_bounds = urban_shapes.total_bounds
                 forest_clipped = forest_boundary.cx[urban_bounds[0]:urban_bounds[2], urban_bounds[1]:urban_bounds[3]]
+                forest_intersecting = forest_shapes[forest_shapes.geometry.intersects(forest_clipped.unary_union)]
 
-                # Clip the forest shapes to be within the forest boundary
-                forest_clipped = gpd.clip(forest_shapes, forest_clipped)
                 # Exclude areas inside the forest boundary from the urban shapes
-                urban_outside_forest = gpd.sjoin(urban_shapes, forest_clipped, how="left")
+                urban_outside_forest = gpd.sjoin(urban_shapes, forest_intersecting, how="left")
 
                 # Filter out rows where 'index_right' is NaN (i.e., areas outside the forest boundary)
                 urban_outside_forest = urban_outside_forest[urban_outside_forest['index_right'].isna()].drop(columns='index_right')
@@ -559,7 +558,7 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
 
 
                 # Combine the clipped forest shapes and urban shapes outside the forest
-                fused_shapes = pd.concat([forest_clipped, urban_outside_forest], ignore_index=True)
+                fused_shapes = pd.concat([forest_intersecting, urban_outside_forest], ignore_index=True)
                 # Ensure the fused geometries are valid
                 if not all(fused_shapes.is_valid):
                     if logger:

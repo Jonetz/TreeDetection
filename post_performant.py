@@ -3,6 +3,8 @@ import os
 import rasterio
 import fiona
 import numpy as np
+import re
+import warnings
 
 from shapely.geometry import shape, Point
 from concurrent.futures import ThreadPoolExecutor
@@ -508,7 +510,7 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         for feature in filtered_features:
             dest.write(feature)
 
-def process_files_in_directory(directory, height_directory, confidence_threshold, containment_threshold, parallel=True):
+def process_files_in_directory(directory, height_directory, confidence_threshold, containment_threshold, parallel=True, filename_pattern=None):
     """
     Process all GeoJSON files in a directory and save the results.
 
@@ -519,35 +521,60 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         containment_threshold (float): Threshold for polygon containment.
         parallel (bool): Whether to process files in parallel (default is True).
     """
+    # List all GeoJSON files in the specified directory
     geojson_files = [f for f in os.listdir(directory) if f.endswith('.geojson')]
+    
+    if filename_pattern is None:
+        height_data_pattern = "(\\d+)\\.tif"
+        image_pattern = "(\\d+)\\.tif"
+
+    height_data_pattern, image_pattern = filename_pattern
+    if height_data_pattern is None:
+        height_data_pattern = "(\\d+)\\.tif"
+    if image_pattern is None:
+        image_pattern = "(\\d+)\\.tif"
+    image_pattern = re.compile(image_pattern)
+    height_data_pattern = re.compile(height_data_pattern)
+
+    def find_matching_height_file(base_name):
+        """Find a matching height data file based on regex groups from the base name."""
+        geojson_match = image_pattern.match(base_name)
+        if geojson_match:
+            geojson_groups = geojson_match.groups()  # Capture groups for matching
+            for height_file in os.listdir(height_directory):
+                height_match = height_data_pattern.match(height_file)
+                if height_match and height_match.groups()[:len(geojson_groups)] == geojson_groups:
+                    return os.path.join(height_directory, height_file)
+        return None
 
     if not parallel:
+        # Sequential processing
         for filename in geojson_files:
             file_path = os.path.join(directory, filename)
-            base_name = os.path.splitext(os.path.basename(file_path))[0] # filename.split('_')[1] + filename.split('_')[2]
-            height_file_name = f"{base_name}.tif"
-            height_file_path = os.path.join(height_directory, height_file_name)
+            base_name = os.path.splitext(os.path.basename(filename))[0]
+            height_file_path = find_matching_height_file(base_name)
 
-            if os.path.exists(height_file_path):
+            if height_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
                 process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path)
             else:
-                print(f"Height data file not found for: {filename}, searching for: {height_file_name}")
+                warnings.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
     else:
+        # Parallel processing
         with ThreadPoolExecutor() as executor:
             futures = []
             for filename in geojson_files:
                 file_path = os.path.join(directory, filename)
-                base_name = os.path.splitext(os.path.basename(file_path))[0] 
-                height_file_name = f"{base_name}.tif"
-                height_file_path = os.path.join(height_directory, height_file_name)
+                base_name = os.path.splitext(os.path.basename(filename))[0]
+                height_file_path = find_matching_height_file(base_name)
 
-                if os.path.exists(height_file_path):
+                if height_file_path:
                     processed_file_path = os.path.join(directory, f"processed_{filename}")
                     futures.append(executor.submit(process_single_file, file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path))
                 else:
-                    print(f"Height data file not found for: {filename}, searching for: {height_file_name}")
+                    warnings.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
 
+            # Ensure all futures complete
             for future in futures:
                 future.result()
 

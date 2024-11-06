@@ -1,5 +1,7 @@
 import sys
 import os
+import re
+import warnings
 
 import torch
 # Add the root project directory to the system path
@@ -27,10 +29,11 @@ def postprocess_files(config):
     """
     postprocess the files according to the configuration.
     """
+    filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
     # 1. Filter with post-processing rules 
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
                                 confidence_threshold=config['confidence_threshold'], containment_threshold=config['containment_threshold'],\
-                                parallel=True)
+                                parallel=True, filename_pattern=filename_pattern)
     logger = config["logger"]
     # 2. Filter with exclude outlines
     exclude_outlines(config)
@@ -220,23 +223,51 @@ def preprocess_files(config):
         raise FileNotFoundError(f"Image directory not found: {images_directory}")
     if not os.path.isdir(images_directory):
         raise NotADirectoryError(f"Image directory is not a directory: {images_directory}")
-    # Take all paths in the directory that end with .tif
+
+    # Collect all TIF files in the directory
     images_paths = [os.path.join(images_directory, f) for f in os.listdir(images_directory) if f.endswith('.tif')]
-    # Remove all paths that are in config["continue"], as they have already been processed
+
+    # Remove files that have already been processed
     if os.path.exists(config["continue"]):
         with open(config["continue"], 'r') as f:
             continue_files = f.read().splitlines()
         images_paths = [f for f in images_paths if f not in continue_files]
+
+    # Regex patterns
+    image_regex_pattern = re.compile(config["image_regex"])
+    height_data_regex_pattern = re.compile(config["height_data_regex"])
+
+    # Filter image paths based on the `image_regex` pattern applied to the base name
+    images_paths = [f for f in images_paths if image_regex_pattern.search(os.path.basename(f))]
+        
+    # Filter for height data files based on base names
+    height_data_paths = [f for f in images_paths if height_data_regex_pattern.search(os.path.basename(f))]
+
+    # Create mappings based on the regex groups from base names
+    image_identifiers = {
+        image_regex_pattern.search(os.path.basename(f)).group(1): f 
+        for f in images_paths if image_regex_pattern.search(os.path.basename(f))
+    }
+    height_data_identifiers = {
+        height_data_regex_pattern.search(os.path.basename(f)).group(1): f 
+        for f in height_data_paths if height_data_regex_pattern.search(os.path.basename(f))
+    }
+
+    # Validate height data availability
+    missing_height_data = []
+    for identifier, image_path in image_identifiers.items():
+        if identifier not in height_data_identifiers:
+            warnings.warn(f"Warning: No corresponding height data found for image file {image_path}")
+            missing_height_data.append(image_path)
+
     if not images_paths:
-        raise FileNotFoundError(f"No image TIF-files found in the directory: {images_directory} or all files have already been processed.")
-    
-    # 2. Tile the images
-    tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"], max_workers=config["num_workers"], logger=config["logger"])
+        raise FileNotFoundError(f"No image TIF-files matching the pattern found in the directory: {images_directory} or all files have already been processed.")
 
-    # 3. Validate nDOM Availability
-    #TODO: Implement nDOM availability check, warn if not available
+    # Continue with tiling if there are valid images
+    if images_paths:
+        tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"], max_workers=config["num_workers"], logger=config["logger"])
 
-    return
+    return images_paths
 
 def process_files(config):
     """
