@@ -161,3 +161,4 @@ cython_debug/
 
 # Project Specific ignores
 data/*
+output/*
