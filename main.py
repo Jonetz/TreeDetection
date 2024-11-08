@@ -219,13 +219,19 @@ def preprocess_files(config):
     """
     # 1. Read from the dictionary   
     images_directory = config["image_directory"] 
+    height_data_directory = config["height_data_path"]
     if not os.path.exists(images_directory):
         raise FileNotFoundError(f"Image directory not found: {images_directory}")
     if not os.path.isdir(images_directory):
         raise NotADirectoryError(f"Image directory is not a directory: {images_directory}")
+    if not os.path.exists(height_data_directory):
+        raise FileNotFoundError(f"Height directory not found: {height_data_directory}")
+    if not os.path.isdir(height_data_directory):
+        raise NotADirectoryError(f"Height directory is not a directory: {height_data_directory}")
 
     # Collect all TIF files in the directory
     images_paths = [os.path.join(images_directory, f) for f in os.listdir(images_directory) if f.endswith('.tif')]
+    height_paths = [os.path.join(height_data_directory, f) for f in os.listdir(height_data_directory) if f.endswith('.tif')]
 
     # Remove files that have already been processed
     if os.path.exists(config["continue"]):
@@ -241,17 +247,23 @@ def preprocess_files(config):
     images_paths = [f for f in images_paths if image_regex_pattern.search(os.path.basename(f))]
         
     # Filter for height data files based on base names
-    height_data_paths = [f for f in images_paths if height_data_regex_pattern.search(os.path.basename(f))]
+    height_data_paths = [f for f in height_paths if height_data_regex_pattern.search(os.path.basename(f))]
 
-    # Create mappings based on the regex groups from base names
-    image_identifiers = {
-        image_regex_pattern.search(os.path.basename(f)).group(1): f 
-        for f in images_paths if image_regex_pattern.search(os.path.basename(f))
-    }
-    height_data_identifiers = {
-        height_data_regex_pattern.search(os.path.basename(f)).group(1): f 
-        for f in height_data_paths if height_data_regex_pattern.search(os.path.basename(f))
-    }
+    # Process image identifiers
+    image_identifiers = {}
+    for f in images_paths:
+        match = image_regex_pattern.search(os.path.basename(f))
+        if match:
+            # Smash all groups together without any separator
+            image_identifiers["".join(match.groups())] = f
+
+    # Process height data identifiers
+    height_data_identifiers = {}
+    for f in height_data_paths:
+        match = height_data_regex_pattern.search(os.path.basename(f))
+        if match:
+            # Smash all groups together without any separator
+            height_data_identifiers["".join(match.groups())] = f
 
     # Validate height data availability
     missing_height_data = []
@@ -331,5 +343,5 @@ if __name__ == "__main__":
     # Start reading the files and validate the configuration
 
     # Start the processing
-    process_files(config)    
-    #profile_code(config)
+    #process_files(config)    
+    profile_code(config)

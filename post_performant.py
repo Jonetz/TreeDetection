@@ -554,7 +554,7 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         height_data_pattern = "(\\d+)\\.tif"
         image_pattern = "(\\d+)\\.tif"
 
-    height_data_pattern, image_pattern = filename_pattern
+    image_pattern, height_data_pattern = filename_pattern
     if height_data_pattern is None:
         height_data_pattern = "(\\d+)\\.tif"
     if image_pattern is None:
@@ -562,15 +562,18 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
     image_pattern = re.compile(image_pattern)
     height_data_pattern = re.compile(height_data_pattern)
 
-    def find_matching_height_file(base_name):
+    def find_matching_height_file(base_name):        
         """Find a matching height data file based on regex groups from the base name."""
-        geojson_match = image_pattern.match(base_name)
+        geojson_match = image_pattern.match(base_name + ".tif")
         if geojson_match:
             geojson_groups = geojson_match.groups()  # Capture groups for matching
             for height_file in os.listdir(height_directory):
                 height_match = height_data_pattern.match(height_file)
-                if height_match and height_match.groups()[:len(geojson_groups)] == geojson_groups:
-                    return os.path.join(height_directory, height_file)
+                if height_match:
+                    height_groups = height_match.groups()
+                    # Check if height groups start with geojson groups
+                    if height_groups[:len(geojson_groups)] == geojson_groups:
+                        return os.path.join(height_directory, height_file)
         return None
 
 
