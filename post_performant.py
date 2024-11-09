@@ -522,15 +522,10 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
     filtered_features = []
     for feature in processed_data["features"]:
         properties = feature['properties']
-        if (
-            float(properties.get('Confidence_score', 0)) > 0.35 and
-            3 < float(properties.get('TreeHeight', 0)) < 30 and
-            bool(properties.get('visualize', 0)) == 1
-        ):
-            if 'Centroid' in feature['properties']:
-                feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
-            feature = order_properties(feature, new_properties_schema)
-            filtered_features.append(feature)
+        if 'Centroid' in feature['properties']:
+            feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
+        feature = order_properties(feature, new_properties_schema)
+        filtered_features.append(feature)
 
     # Write the filtered features to the new GeoJSON file
     with fiona.open(processed_file_path, 'w', driver='GeoJSON', schema=new_schema, crs=crs) as dest:
@@ -567,12 +562,14 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         geojson_match = image_pattern.match(base_name + ".tif")
         if geojson_match:
             geojson_groups = geojson_match.groups()  # Capture groups for matching
+            geojson_concat = ''.join(geojson_groups)
             for height_file in os.listdir(height_directory):
                 height_match = height_data_pattern.match(height_file)
                 if height_match:
                     height_groups = height_match.groups()
+                    height_concat = ''.join(height_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
                     # Check if height groups start with geojson groups
-                    if height_groups[:len(geojson_groups)] == geojson_groups:
+                    if height_concat == geojson_concat:                 
                         return os.path.join(height_directory, height_file)
         return None
 
@@ -594,8 +591,10 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         with ThreadPoolExecutor() as executor:
             futures = []
             for filename in geojson_files:
+                if filename.startswith("processed_"):
+                    continue
                 file_path = os.path.join(directory, filename)
-                base_name = os.path.splitext(os.path.basename(filename))[0]
+                base_name = os.path.splitext(os.path.basename(filename))[0]                
                 height_file_path = find_matching_height_file(base_name)
 
                 if height_file_path:
