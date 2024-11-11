@@ -15,14 +15,27 @@ import pandas as pd
 from pathlib import Path
 from rasterio.transform import xy
 from rasterio.crs import CRS
-from shapely.geometry import box, shape
+from shapely.geometry import box, shape, Polygon
 from shapely.errors import ShapelyError
 
 from pycocotools import mask as mask_util
 
 from concurrent.futures import ThreadPoolExecutor
 
+class RoundedFloatEncoder(json.JSONEncoder):
+    def __init__(self, *args, precision=2, **kwargs):
+        self.precision = precision
+        super().__init__(*args, **kwargs)
 
+    def encode(self, obj):
+        if isinstance(obj, float):
+            return format(obj, f".{self.precision}f")
+        elif isinstance(obj, dict):
+            return "{" + ", ".join(f"{self.encode(k)}: {self.encode(v)}" for k, v in obj.items()) + "}"
+        elif isinstance(obj, list):
+            return "[" + ", ".join(self.encode(v) for v in obj) + "]"
+        return super().encode(obj)
+    
 def polygon_from_mask(masked_arr):
     """Convert RLE data from the output instances into Polygons.
 
@@ -148,30 +161,21 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
             output_image_folder = Path(output_fold) / base_image_name
             output_image_folder.mkdir(parents=True, exist_ok=True)  # Ensure the image directory exists
             output_geo_file = output_image_folder / (tile_image_name.replace(".json", "").replace("Prediction_",
-                                                                                                  "") + ".geojson")  # Use the tile image name for the GeoJSON name
+                                                                                                  "") + ".gpkg")  # Use the tile image name for the GeoJSON name
             if os.path.isfile(output_geo_file):
-                logger.debug(f"file {tile_image_name} already processed for projecting to geojson")
+                logger.debug(f"file {tile_image_name} already processed for projecting to geojson/gpkg")
                 return
 
             with rasterio.open(tifpath) as data:
                 epsg = CRS.from_string(data.crs.wkt).to_epsg()
                 raster_transform = data.transform
 
-            # Create a GeoJSON structure
-            geofile = {
-                "type": "FeatureCollection",
-                "crs": {
-                    "type": "name",
-                    "properties": {
-                        "name": f"urn:ogc:def:crs:EPSG::{epsg}"
-                    },
-                },
-                "features": [],
-            }
-
             # Load the prediction JSON
             with open(filename, "r") as prediction_file:
                 datajson = json.load(prediction_file)
+
+            # List to collect all features as geometry and properties
+            features = []
 
             # Process each polygon in the prediction
             for crown_data in datajson:
@@ -186,20 +190,16 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
                 x_coords, y_coords = xy(raster_transform, crown_coords_array[:, 1], crown_coords_array[:, 0])
                 moved_coords = list(zip(x_coords, y_coords))
 
-                feature = {
-                    "type": "Feature",
-                    "properties": {
-                        "Confidence_score": confidence_score
-                    },
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [moved_coords],
-                    },
-                }
-                geofile["features"].append(feature)
+                # Create a Polygon geometry
+                polygon = Polygon(moved_coords)
+                features.append({"geometry": polygon, "Confidence_score": confidence_score})
 
-            with open(output_geo_file, "w") as dest:
-                json.dump(geofile, dest)
+            # Convert to GeoDataFrame
+            gdf = gpd.GeoDataFrame(features, crs=f"EPSG:{epsg}")
+
+            # Save to GPKG with specified precision
+            gdf.to_file(output_geo_file, driver="GPKG")
+            
             return f"Successfully processed: {filename.name}"
         except Exception as e:
             return f"Failed to process {filename.name}: {e}"
@@ -213,7 +213,7 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
         if logger and verbose:
             logger.debug(result)
     if logger and verbose:
-        logger.debug("GeoJSON projection complete.")
+        logger.debug("GeoJSON/GPKG projection complete.")
 
 
 def filename_geoinfo(filename):
@@ -221,7 +221,7 @@ def filename_geoinfo(filename):
 
     Copied directly from detectree2 
     """
-    parts = os.path.basename(filename).replace(".geojson", "").split("_")
+    parts = os.path.basename(filename).replace(".geojson", "").replace(".gpkg", "").split("_")
 
     parts = [int(part) for part in parts[-5:]]  # type: ignore
     minx = parts[0]
@@ -275,7 +275,7 @@ def box_filter(filename, shift: int = 0):
     return bounding_box
 
 
-def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
+def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simplify_tolerance=0.2):
     """
     Stitch together predicted crowns from multiple geojson files, applying a spatial filter.
 
@@ -284,12 +284,14 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
         shift: Number of meters to shift the size of the bounding box by to avoid edge crowns.
         max_workers: Maximum number of threads for parallel processing.
         logger: Logger object for logging messages.
+        simplify_tolerance: Tolerance level for geometry simplification in meters. 
+                            Higher values result in more simplification.
 
     Returns:
         gpd.GeoDataFrame: A GeoDataFrame containing all the crowns.
     """
     crowns_path = Path(folder)
-    files = list(crowns_path.glob("*geojson"))
+    files = list(crowns_path.glob("*gpkg"))
 
     if len(files) == 0:
         raise FileNotFoundError(f"No geojson files found in folder {folder}.")
@@ -317,6 +319,11 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
 
             # Perform spatial join to filter crowns within the box
             crowns_tile = gpd.sjoin(crowns_tile, geo, "inner", "within")
+            
+            # Simplify geometries if tolerance is set
+            if simplify_tolerance > 0:
+                crowns_tile['geometry'] = crowns_tile['geometry'].simplify(simplify_tolerance, preserve_topology=True)
+
 
             return crowns_tile
         except FileNotFoundError:
@@ -540,7 +547,7 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
     for top_folder in [urban_fold]:
         # For each folder, process corresponding urban and forest GeoJSONs
         for name in os.listdir(top_folder):
-            if not name.endswith(".geojson"):
+            if not (name.endswith(".geojson") or name.endswith(".gpkg")):
                 continue
             urban_geojson_path = os.path.join(urban_fold, name)
             forest_geojson_path = os.path.join(forrest_fold, name)
@@ -612,7 +619,7 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                         logger.warning(f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")      
                 
                 # Save the fused result as a new GeoJSON file
-                fused_shapes.to_file(output_path, driver="GeoJSON")
+                fused_shapes.to_file(output_path, driver="GPKG")
 
 
 def delete_contents(out_dir, logger=None):

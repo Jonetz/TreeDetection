@@ -141,6 +141,6 @@ def get_config(config_path: str):
     config["debug"] = config.get("debug", False)
     config["logger"] = setup_logging(os.path.join(config["output_directory"], "logs"), config["debug"])
     config["keep_intermediate"] = config.get("keep_intermediate", False)
-
+    config["simplify_tolerance"] = config.get("simplify_tolerance", 0.2)
 
     return config

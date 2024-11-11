@@ -9,7 +9,7 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents
+from helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents, RoundedFloatEncoder
 from post_performant import process_files_in_directory
 
 from detectron2.engine import DefaultPredictor
@@ -31,18 +31,20 @@ def postprocess_files(config):
     """
     postprocess the files according to the configuration.
     """
+    logger = config["logger"]
+    logger.info("Postprocessing the predictions.")
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
     # 1. Filter with post-processing rules 
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
                                 confidence_threshold=config['confidence_threshold'], containment_threshold=config['containment_threshold'],\
                                 parallel=True, filename_pattern=filename_pattern)
-    logger = config["logger"]
+    logger.info("Excluding Outlines.")
     # 2. Filter with exclude outlines
     exclude_outlines(config)
 
     # 4. Save the final predictions as gpkg in another folder 
     for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
-        if not file.endswith('.geojson') or not file.startswith('processed_'):
+        if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
             continue
         crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
@@ -54,7 +56,7 @@ def exclude_outlines(config):
         exclude_outline = gpd.read_file(outline)
 
         for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
-            if not file.endswith('.geojson') or not file.startswith('processed_'):
+            if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
                 continue
             file_path = os.path.join(config["output_directory"], 'geojson_predictions', file)
             crowns = gpd.read_file(file_path)
@@ -72,7 +74,7 @@ def exclude_outlines(config):
             crowns_filtered = crowns[~crowns.geometry.within(exclude_outline_clipped.geometry.union_all())]
 
             # Write the filtered crowns back to the original path, overwriting the original file
-            crowns_filtered.to_file(file_path, driver='GeoJSON')
+            crowns_filtered.to_file(file_path, driver='GPKG')
 
 
 def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50):
@@ -139,7 +141,7 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50)
         # Save predictions as COCO JSON format
         evaluations = instances_to_coco_json(outputs["instances"].to("cpu"), d["file_name"])
         with open(output_file, "w") as dest:
-            json.dump(evaluations, dest)
+            json.dump(evaluations, dest, cls=RoundedFloatEncoder, separators=(',', ':'))
         return f"Processed: {file_name_path}"
 
     # Use ThreadPoolExecutor for parallel inference
@@ -190,15 +192,15 @@ def predict_tiles(config):
         for top_folder in [urban_fold, forrest_fold]:
             forrest_folders = [f for f in os.listdir(top_folder) if os.path.isdir(os.path.join(top_folder, f))]
             for folder in forrest_folders:
-                output_path = os.path.join(top_folder, os.path.basename(folder) + ".geojson")
+                output_path = os.path.join(top_folder, os.path.basename(folder) + ".gpkg")
                 if os.path.isfile(output_path):
                     logger.debug(f"folder {folder} already processed for predicting tiles")
                     continue
                 crowns = stitch_crowns(os.path.join(top_folder, folder), max_workers=config["num_workers"],
-                                       logger=config["logger"])
+                                       logger=config["logger"], simplify_tolerance=config['simplify_tolerance'])
                 # TODO Instead of using the clean crowns function use our own post-processing function
                 # crowns = clean_crowns(crowns, iou_threshold=config["iou_threshold"], confidence=config["confidence_threshold_stitching"], logger=config["logger"])
-                crowns.to_file(output_path, driver="GeoJSON")
+                crowns.to_file(output_path, driver="GPKG")
         logger.info("Stitching has been completed. Begin fusing the predictions.")
 
         # Step 4: Fusion based on forest outline
@@ -307,7 +309,7 @@ def process_files(config):
     # Print stats about the processing
 
 
-def profile_code(config):
+def profile_code(config, threshold = 0.05):
     """
     Profile the code to analyze performance using cProfile.
 
@@ -327,6 +329,7 @@ def profile_code(config):
     import cProfile
     import pstats
     import io
+
     pr = cProfile.Profile()
     pr.enable()
 
@@ -336,10 +339,15 @@ def profile_code(config):
     pr.disable()
 
     s = io.StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats(pstats.SortKey.TIME)
-    ps.print_stats()
+    # Sort by cumulative time and apply the threshold
+    ps = pstats.Stats(pr, stream=s).sort_stats(pstats.SortKey.CUMULATIVE)
+    ps.print_stats(threshold)  # Only display functions above the cumulative time threshold
+
     logger = config.get("logger", None)
-    logger.info(s.getvalue())
+    if logger:
+        logger.info(s.getvalue())
+    else:
+        print(s.getvalue())
 
 
 if __name__ == "__main__":

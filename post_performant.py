@@ -528,7 +528,7 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         filtered_features.append(feature)
 
     # Write the filtered features to the new GeoJSON file
-    with fiona.open(processed_file_path, 'w', driver='GeoJSON', schema=new_schema, crs=crs) as dest:
+    with fiona.open(processed_file_path, 'w', driver='GPKG', schema=new_schema, crs=crs) as dest:
         for feature in filtered_features:
             dest.write(feature)
 
@@ -543,7 +543,7 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         containment_threshold (float): Threshold for polygon containment.
         parallel (bool): Whether to process files in parallel (default is True).
     """
-    geojson_files = [f for f in os.listdir(directory) if f.endswith('.geojson')]
+    geojson_files = [f for f in os.listdir(directory) if f.endswith('.gpkg')]
     
     if filename_pattern is None:
         height_data_pattern = "(\\d+)\\.tif"
