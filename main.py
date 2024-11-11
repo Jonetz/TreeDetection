@@ -186,16 +186,6 @@ def predict_tiles(config):
                            output_fold=forrest_fold, max_workers=config["num_workers"],
                            logger=config["logger"], verbose=config["verbose"])
 
-        # Delete the temporary files - includes predictions and tiles
-        if not config['keep_intermediate'] and os.path.exists(
-                os.path.join(config["output_directory"], "urban_predictions")):
-            delete_contents(os.path.join(config["output_directory"], "urban_predictions"), logger=logger)
-        if not config['keep_intermediate'] and os.path.exists(
-                os.path.join(config["output_directory"], "forrest_predictions")):
-            delete_contents(os.path.join(config["output_directory"], "forrest_predictions"), logger=logger)
-        if not config['keep_intermediate'] and os.path.exists(config["tiles_path"]):
-            delete_contents(config["tiles_path"], logger=logger)
-
         logger.info("Predictions have been saved to the output directory. Begin stitching the tiles.")
         # Stitch the predictions together
         for top_folder in [urban_fold, forrest_fold]:
@@ -209,10 +199,7 @@ def predict_tiles(config):
                                        logger=config["logger"])
                 # TODO Instead of using the clean crowns function use our own post-processing function
                 # crowns = clean_crowns(crowns, iou_threshold=config["iou_threshold"], confidence=config["confidence_threshold_stitching"], logger=config["logger"])
-                crowns.to_file(os.path.join(top_folder, output_path + ".geojson"), driver="GeoJSON")
-                if not config['keep_intermediate']:
-                    delete_contents(os.path.join(top_folder, folder), logger=logger)
-
+                crowns.to_file(output_path, driver="GeoJSON")
         logger.info("Stitching has been completed. Begin fusing the predictions.")
 
         # Step 4: Fusion based on forest outline
