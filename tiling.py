@@ -143,9 +143,7 @@ def tile_data(
     if not os.path.isdir(out_dir):
         raise NotADirectoryError(f"Output directory is not a directory: {out_dir}")
     
-    #delete_contents(out_dir, logger=logger)
-
-
+    """
     for data_path in file_list:   
         img_out_dir = os.path.join(out_dir, Path(data_path).stem)
         tile_single_file(
@@ -183,7 +181,6 @@ def tile_data(
                     logger.error(f"Error processing file: {e}")
                 else:
                     print(f"Error processing file: {e}")
-        """
 if __name__ == "__main__":
     # Example usage
     file_list = ["file1.tif", "file2.tif", "file3.tif"]
