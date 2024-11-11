@@ -99,7 +99,8 @@ def tile_single_file(
                         dest.write(out_img)
                 except Exception as e:
                     logger.error(f"Failed to write {out_tif}: {e}")
-
+                if not os.path.exists(out_tif):
+                    logger.error(f'Out tif does not exist {out_tif}')
 
                 # Read the saved TIFF file and convert to RGB for PNG output
                 arr = rasterio.open(out_tif).read()

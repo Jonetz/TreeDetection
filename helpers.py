@@ -494,12 +494,32 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
         if os.path.exists(output_dir) and not os.path.isdir(output_dir):
             os.unlink(output_dir)  # Synchronously remove directories
         os.makedirs(output_dir, exist_ok=True)
+
     forest_boundary = gpd.read_file(forrest_path)
-    # Ensure that the forest boundary geometries are valid
-    if not all(forest_boundary.is_valid):
-        if logger:
-            logger.error("Invalid geometries detected in the forest boundary. Attempting to fix.")
-        forest_boundary = forest_boundary.buffer(0)  # A common fix for invalid geometries
+    # Ensure that the geometries are not None and valid
+    none_geometries_count = forest_boundary['geometry'].isnull().sum()
+    if none_geometries_count > 0:
+        logger.debug(f"Found {none_geometries_count} None geometries in forest shape. Removing them.")
+        # Remove the rows with None geometries
+        forest_boundary = forest_boundary[~forest_boundary['geometry'].isnull()]
+    # Log invalid geometries
+    if not forest_boundary.is_valid.all():
+        logger.debug("Invalid geometries found. Attempting to fix...")
+        # Fix invalid geometries by calling make_valid
+        forest_boundary["geometry"] = forest_boundary["geometry"].apply(
+            lambda geom: geom.make_valid() if not geom.is_valid else geom
+        )        
+        # Check if all geometries are valid after make_valid
+        if not forest_boundary.is_valid.all():
+            logger.warn(f"Some geometries are still invalid after the fix.")
+    
+    # Optionally, remove empty geometries
+    forest_boundary = forest_boundary[~forest_boundary.is_empty]
+    
+    # Apply buffer(0) to fix remaining issues (e.g., self-intersections)
+    forest_boundary["geometry"] = forest_boundary["geometry"].apply(
+        lambda geom: geom.buffer(0) if not geom.is_valid else geom
+    )
 
     for top_folder in [urban_fold]:
         # For each folder, process corresponding urban and forest GeoJSONs
@@ -520,7 +540,7 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
 
             if os.path.exists(urban_geojson_path) and os.path.exists(forest_geojson_path):
                 if logger:
-                    logger.info(f"Fusing predictions for tile {name}...")
+                    logger.debug(f"Fusing predictions for tile {name}...")
 
                 # Read the urban and forest predictions
                 urban_shapes = gpd.read_file(urban_geojson_path)
@@ -561,9 +581,10 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
                 fused_shapes = pd.concat([forest_intersecting, urban_outside_forest], ignore_index=True)
                 # Ensure the fused geometries are valid
                 if not all(fused_shapes.is_valid):
-                    if logger:
-                        logger.warning(f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")
+                    forest_boundary = fused_shapes.make_valid()
                     fused_shapes['geometry'] = fused_shapes.buffer(0)  # Fix invalid geometries
+                    if not all(fused_shapes.is_valid) and logger:
+                        logger.warning(f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")      
                 
                 # Save the fused result as a new GeoJSON file
                 output_name = os.path.basename(name)
