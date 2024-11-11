@@ -22,6 +22,7 @@ from pycocotools import mask as mask_util
 
 from concurrent.futures import ThreadPoolExecutor
 
+
 def polygon_from_mask(masked_arr):
     """Convert RLE data from the output instances into Polygons.
 
@@ -50,6 +51,7 @@ def polygon_from_mask(masked_arr):
     else:
         return 0
 
+
 def get_filenames(directory: str):
     """Get the file names if no geojson is present.
 
@@ -67,6 +69,7 @@ def get_filenames(directory: str):
                 dataset_dicts.append({"file_name": file_path})
 
     return dataset_dicts
+
 
 def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger=None, verbose=False):
     """
@@ -88,7 +91,7 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
     if os.path.exists(output_fold):
         if logger:
             logger.debug(f"Removing existing output folder: {output_fold}")
-        #shutil.rmtree(output_fold)
+        # shutil.rmtree(output_fold)
 
     # Ensure output directory exists
     Path(output_fold).mkdir(parents=True, exist_ok=True)
@@ -141,6 +144,15 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
             # Extract the base image name from the TIFF path
             base_image_name = extract_base_image_name(tifpath)
 
+            # Generate output GeoJSON file path using the base image name
+            output_image_folder = Path(output_fold) / base_image_name
+            output_image_folder.mkdir(parents=True, exist_ok=True)  # Ensure the image directory exists
+            output_geo_file = output_image_folder / (tile_image_name.replace(".json", "").replace("Prediction_",
+                                                                                                  "") + ".geojson")  # Use the tile image name for the GeoJSON name
+            if os.path.isfile(output_geo_file):
+                logger.debug(f"file {tile_image_name} already processed for projecting to geojson")
+                return
+
             with rasterio.open(tifpath) as data:
                 epsg = CRS.from_string(data.crs.wkt).to_epsg()
                 raster_transform = data.transform
@@ -186,10 +198,6 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
                 }
                 geofile["features"].append(feature)
 
-            # Generate output GeoJSON file path using the base image name
-            output_image_folder = Path(output_fold) / base_image_name
-            output_image_folder.mkdir(parents=True, exist_ok=True)  # Ensure the image directory exists
-            output_geo_file = output_image_folder / (tile_image_name.replace(".json", "").replace("Prediction_", "") + ".geojson")  # Use the tile image name for the GeoJSON name
             with open(output_geo_file, "w") as dest:
                 json.dump(geofile, dest)
             return f"Successfully processed: {filename.name}"
@@ -207,6 +215,7 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
     if logger and verbose:
         logger.debug("GeoJSON projection complete.")
 
+
 def filename_geoinfo(filename):
     """Return geographic info of a tile from its filename.
 
@@ -221,6 +230,7 @@ def filename_geoinfo(filename):
     buffer = parts[3]
     crs = parts[4]
     return (minx, miny, width, buffer, crs)
+
 
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
     """Generate bounding box from geographic specifications.
@@ -247,6 +257,7 @@ def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0)
     geo = gpd.GeoDataFrame({"geometry": bbox}, index=[0], crs=CRS.from_epsg(crs))
     return geo
 
+
 def box_filter(filename, shift: int = 0):
     """Create a bounding box from a file name to filter edge crowns.
 
@@ -263,6 +274,7 @@ def box_filter(filename, shift: int = 0):
     bounding_box = box_make(minx, miny, width, buffer, crs, shift)
     return bounding_box
 
+
 def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
     """
     Stitch together predicted crowns from multiple geojson files, applying a spatial filter.
@@ -278,16 +290,16 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
     """
     crowns_path = Path(folder)
     files = list(crowns_path.glob("*geojson"))
-    
+
     if len(files) == 0:
         raise FileNotFoundError(f"No geojson files found in folder {folder}.")
-    
+
     # Get CRS from the first file, with error handling
     try:
         _, _, _, _, crs = filename_geoinfo(files[0])
     except Exception as e:
         raise ValueError(f"Failed to retrieve CRS from the first file: {files[0]}. Error: {e}")
-    
+
     total_files = len(files)
     if logger:
         logger.debug(f"Stitching crowns from {total_files} files")
@@ -299,13 +311,13 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
         try:
             # Read the GeoJSON file, handle file I/O errors
             crowns_tile = gpd.read_file(file)
-            
+
             # Apply box filter based on shift, ensure no issues arise from bounding box
             geo = box_filter(file, shift)
-            
+
             # Perform spatial join to filter crowns within the box
             crowns_tile = gpd.sjoin(crowns_tile, geo, "inner", "within")
-            
+
             return crowns_tile
         except FileNotFoundError:
             logger.warn(f"File not found: {file}")
@@ -314,7 +326,7 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
         except Exception as e:
             logger.warn(f"An error occurred while processing {file}: {e}, see debug for more details.")
             logger.debug(traceback.format_exc())
-        
+
         return None
 
     # Use ThreadPoolExecutor to process files in parallel
@@ -323,7 +335,7 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
 
     # Filter out None results (in case of errors)
     crowns_list = [crowns for crowns in crowns_list if crowns is not None]
-    
+
     if len(crowns_list) == 0:
         raise RuntimeError("No valid crowns were processed.")
 
@@ -332,7 +344,7 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
         crowns = pd.concat(crowns_list, ignore_index=True)
     except ValueError as e:
         raise RuntimeError(f"Error concatenating crowns: {e}")
-    
+
     # Drop unnecessary index column from spatial join
     if "index_right" in crowns.columns:
         crowns = crowns.drop("index_right", axis=1)
@@ -343,39 +355,43 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None):
             crowns = gpd.GeoDataFrame(crowns, crs=CRS.from_epsg(crs))
         except Exception as e:
             raise RuntimeError(f"Error converting to GeoDataFrame with CRS: {e}")
-    
+
     return crowns
+
 
 def calc_iou(shape1, shape2):
     """Calculate the IoU of two shapes."""
     iou = shape1.intersection(shape2).area / shape1.union(shape2).area
     return iou
 
+
 def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Round the coordinates of the geometries in the GeoDataFrame."""
+
     def round_geometry(geometry):
         # Check if geometry is valid
         if geometry.is_empty or not geometry.is_valid:
             return geometry
-        
+
         # Round each coordinate
         coords = np.array(geometry.exterior.coords)
         rounded_coords = [(round(x, 1), round(y, 1)) for x, y in coords]
-        
+
         # Create a new Polygon with rounded coordinates
         return gpd.GeoSeries([gpd.GeoPolygon(rounded_coords)])
 
     # Apply rounding to each geometry
     crowns['geometry'] = crowns['geometry'].apply(round_geometry)
-    
+
     return crowns
+
 
 def clean_crowns(crowns: gpd.GeoDataFrame,
                  iou_threshold: float = 0.7,
                  confidence: float = 0.2,
                  area_threshold: float = 1,
                  field: str = "Confidence_score",
-                 logger = None) -> gpd.GeoDataFrame:
+                 logger=None) -> gpd.GeoDataFrame:
     """Clean overlapping crowns.
 
     copied from detectree2 
@@ -399,10 +415,10 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
     # Ensure the input is a GeoDataFrame with valid geometries
     if not isinstance(crowns, gpd.GeoDataFrame):
         raise ValueError("Input must be a GeoDataFrame")
-    
+
     # Filter any rows with empty or invalid geometry
     crowns = crowns[crowns.is_valid & ~crowns.is_empty]
-    
+
     # Filter any rows with polygon area less than the area threshold
     crowns = crowns[crowns.area > area_threshold].reset_index(drop=True)
 
@@ -413,7 +429,7 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
 
     if logger:
         logger.debug(f"Cleaning {len(crowns)} crowns")
-    
+
     cleaned_crowns = []
 
     # Calculate IoU for all pairs once and store in a DataFrame
@@ -450,7 +466,7 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
         crowns_out = pd.concat(cleaned_crowns, ignore_index=True)
     elif logger:
         logger.debug("No crowns were cleaned. Returning an empty GeoDataFrame.")
-    if not cleaned_crowns:    
+    if not cleaned_crowns:
         return gpd.GeoDataFrame(columns=crowns.columns, crs=crowns.crs)
 
     # Drop 'iou' column and ensure crowns_out is a GeoDataFrame
@@ -473,7 +489,7 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
     return crowns_out.reset_index(drop=True)
 
 
-def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger = None):
+def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=None):
     """
     Fuse the predictions according to the configuration.
 
@@ -483,7 +499,7 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
         forrest_path (str): Path to the forest boundary.
         output_dir (str): Path to the output directory.
         logger: Logger object for logging messages.
-    """    
+    """
     if not os.path.exists(urban_fold) or not os.path.isdir(urban_fold):
         raise FileNotFoundError(f"Urban predictions path not found: {urban_fold}")
     if not os.path.exists(forrest_fold) or not os.path.isdir(forrest_fold):
@@ -526,25 +542,33 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
         for name in os.listdir(top_folder):
             if not name.endswith(".geojson"):
                 continue
-            urban_geojson_path = os.path.join(urban_fold, name )
+            urban_geojson_path = os.path.join(urban_fold, name)
             forest_geojson_path = os.path.join(forrest_fold, name)
             if not os.path.exists(urban_geojson_path):
                 if logger:
-                    logger.error(f"Urban GeoJSON for tile {name} at path {urban_geojson_path} not found. Skipping tile.")
+                    logger.error(
+                        f"Urban GeoJSON for tile {name} at path {urban_geojson_path} not found. Skipping tile.")
                 continue
 
-            if not os.path.exists(forest_geojson_path):#
+            if not os.path.exists(forest_geojson_path):  #
                 if logger:
-                    logger.error(f"Forest GeoJSON for tile {name} at path {forest_geojson_path} not found. Skipping tile.")
+                    logger.error(
+                        f"Forest GeoJSON for tile {name} at path {forest_geojson_path} not found. Skipping tile.")
                 continue
 
             if os.path.exists(urban_geojson_path) and os.path.exists(forest_geojson_path):
                 if logger:
                     logger.debug(f"Fusing predictions for tile {name}...")
 
+                output_path = os.path.join(output_dir, os.path.basename(name))
+                os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+                if os.path.isfile(output_path):
+                    logger.debug(f"file {name} already processed")
+                    continue
+
                 # Read the urban and forest predictions
                 urban_shapes = gpd.read_file(urban_geojson_path)
-                forest_shapes = gpd.read_file(forest_geojson_path)                
+                forest_shapes = gpd.read_file(forest_geojson_path)
                 # Ensure CRS is the same for all geometries
                 if not urban_shapes.crs == forest_shapes.crs == forest_boundary.crs:
                     if logger:
@@ -564,18 +588,19 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
                 urban_outside_forest = gpd.sjoin(urban_shapes, forest_intersecting, how="left")
 
                 # Filter out rows where 'index_right' is NaN (i.e., areas outside the forest boundary)
-                urban_outside_forest = urban_outside_forest[urban_outside_forest['index_right'].isna()].drop(columns='index_right')
+                urban_outside_forest = urban_outside_forest[urban_outside_forest['index_right'].isna()].drop(
+                    columns='index_right')
 
                 # Create a new 'Confidence_score' by prioritizing 'Confidence_score_left'
                 urban_outside_forest['Confidence_score'] = urban_outside_forest['Confidence_score_left'].fillna(
                     urban_outside_forest['Confidence_score_right'])
 
                 # Now that we have 'Confidence_score', we can drop 'Confidence_score_left' and 'Confidence_score_right'
-                urban_outside_forest = urban_outside_forest.drop(columns=['Confidence_score_left', 'Confidence_score_right'])
+                urban_outside_forest = urban_outside_forest.drop(
+                    columns=['Confidence_score_left', 'Confidence_score_right'])
 
                 # Handle any remaining NaN values in 'Confidence_score' by replacing them with a default (e.g., 0)
                 urban_outside_forest['Confidence_score'] = urban_outside_forest['Confidence_score'].fillna(0)
-
 
                 # Combine the clipped forest shapes and urban shapes outside the forest
                 fused_shapes = pd.concat([forest_intersecting, urban_outside_forest], ignore_index=True)
@@ -587,9 +612,8 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger 
                         logger.warning(f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")      
                 
                 # Save the fused result as a new GeoJSON file
-                output_name = os.path.basename(name)
-                os.makedirs(os.path.dirname(output_dir), exist_ok=True)
-                fused_shapes.to_file(os.path.join(output_dir, output_name), driver="GeoJSON")
+                fused_shapes.to_file(output_path, driver="GeoJSON")
+
 
 def delete_contents(out_dir, logger=None):
     # Check for existing files and remove them synchronously
