@@ -115,7 +115,9 @@ def tile_data(
     tile_width: int = 200,
     tile_height: int = 200,
     dtype_bool: bool = False,
-    max_workers: int = 4, logger=None
+    parallel: bool = False,
+    max_workers: int = 4, 
+    logger=None
 ) -> None:
     """
     Tiling multiple raster files and saving output tiles. 
@@ -129,6 +131,7 @@ def tile_data(
         tile_width (int): Width of each tile.
         tile_height (int): Height of each tile.
         dtype_bool (bool): Convert the output to boolean.
+        parallel (bool): whether to use several processes or just one
         max_workers (int): Number of parallel workers to use.
         logger (Logger): Logger object for logging messages
 
@@ -143,44 +146,50 @@ def tile_data(
     if not os.path.isdir(out_dir):
         raise NotADirectoryError(f"Output directory is not a directory: {out_dir}")
     
-    """
-    for data_path in file_list:   
-        img_out_dir = os.path.join(out_dir, Path(data_path).stem)
-        tile_single_file(
-                    data_path,
-                    img_out_dir,
-                    buffer,
-                    tile_width,
-                    tile_height,
-                    dtype_bool,
-                    logger
-                )         
-    """
-    # Tiles multiple raster files in parallel and saves the output tiles.
-    with ProcessPoolExecutor(max_workers=1) as executor:
-        for data_path in file_list:            
-            img_out_dir = os.path.join(out_dir, Path(data_path).stem)
-            futures = [
-                executor.submit(
-                    tile_single_file,
-                    data_path,
-                    img_out_dir,
-                    buffer,
-                    tile_width,
-                    tile_height,
-                    dtype_bool,
-                    logger
-                )
-                
-            ]
-        for future in futures:
+    if not parallel:
+        for data_path in file_list:   
+            img_out_dir = os.path.join(out_dir, Path(data_path).stem)            
             try:
-                future.result()  # Ensure any exceptions are raised
+                tile_single_file(
+                            data_path,
+                            img_out_dir,
+                            buffer,
+                            tile_width,
+                            tile_height,
+                            dtype_bool,
+                            logger
+                        )      
             except Exception as e:
                 if logger:
                     logger.error(f"Error processing file: {e}")
                 else:
-                    print(f"Error processing file: {e}")
+                    print(f"Error processing file: {e}")   
+    else:
+        # Tiles multiple raster files in parallel and saves the output tiles.
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for data_path in file_list:            
+                img_out_dir = os.path.join(out_dir, Path(data_path).stem)
+                futures = [
+                    executor.submit(
+                        tile_single_file,
+                        data_path,
+                        img_out_dir,
+                        buffer,
+                        tile_width,
+                        tile_height,
+                        dtype_bool,
+                        logger
+                    )
+                    
+                ]
+            for future in futures:
+                try:
+                    future.result()  # Ensure any exceptions are raised
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error processing file: {e}")
+                    else:
+                        print(f"Error processing file: {e}")
 if __name__ == "__main__":
     # Example usage
     file_list = ["file1.tif", "file2.tif", "file3.tif"]
