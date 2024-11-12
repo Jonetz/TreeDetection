@@ -9,7 +9,7 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents, RoundedFloatEncoder
+from helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents, RoundedFloatEncoder, exclude_outlines
 from post_performant import process_files_in_directory
 
 from detectron2.engine import DefaultPredictor
@@ -25,7 +25,6 @@ from torch.amp import autocast
 from shapely.geometry import box
 
 gpd.options.display_precision = 2
-
 
 def postprocess_files(config):
     """
@@ -49,33 +48,6 @@ def postprocess_files(config):
         crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
         crowns.to_file(os.path.join(config["output_directory"], file.replace('processed_', '')))
-
-
-def exclude_outlines(config):
-    for outline in config.get('exclude_files', []):
-        exclude_outline = gpd.read_file(outline)
-
-        for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
-            if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
-                continue
-            file_path = os.path.join(config["output_directory"], 'geojson_predictions', file)
-            crowns = gpd.read_file(file_path)
-            exclude_outline = exclude_outline.to_crs(crowns.crs)
-
-            # Get the bounds of the current crowns GeoDataFrame
-            file_bounds = crowns.total_bounds  # [minx, miny, maxx, maxy]
-
-            # Clip the exclude outline to the bounds of the current file to save computing time
-            exclude_outline_clipped = exclude_outline.clip(
-                box(file_bounds[0], file_bounds[1], file_bounds[2], file_bounds[3])  # Using shapely's box
-            )
-
-            # Check which geometries in 'crowns' are completely within the exclude outline
-            crowns_filtered = crowns[~crowns.geometry.within(exclude_outline_clipped.geometry.union_all())]
-
-            # Write the filtered crowns back to the original path, overwriting the original file
-            crowns_filtered.to_file(file_path, driver='GPKG')
-
 
 def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50):
     """
@@ -171,14 +143,14 @@ def predict_tiles(config):
         logger = config["logger"]
         urban_fold = os.path.join(config["output_directory"], "urban_geojson")
         forrest_fold = os.path.join(config["output_directory"], "forrest_geojson")
-
+        '''
         # Predict the tiles using the urban model
         predict_on_model(config, config["urban_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "urban_predictions"))
         # Predict the tiles using the forrest model
         predict_on_model(config, config["forrest_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "forrest_predictions"))
-
+        '''
         # Project the predictions back to the geographic space
         project_to_geojson(config["tiles_path"], pred_fold=os.path.join(config["output_directory"], "urban_predictions"), \
                            output_fold=urban_fold, max_workers=config["num_workers"], \
@@ -292,7 +264,7 @@ def process_files(config):
     Process the files according to the configuration.
     """
     # Read the files and tile them
-    preprocess_files(config)
+    #preprocess_files(config)
 
     # Predict the tiles
     predict_tiles(config)
@@ -358,5 +330,5 @@ if __name__ == "__main__":
     # Start reading the files and validate the configuration
 
     # Start the processing
-    process_files(config)
-    # profile_code(config)
+    #process_files(config)
+    profile_code(config)

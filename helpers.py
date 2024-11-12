@@ -21,6 +21,34 @@ from shapely.errors import ShapelyError
 from pycocotools import mask as mask_util
 
 from concurrent.futures import ThreadPoolExecutor
+from affine import Affine
+
+from shapely.geometry import box, shape
+
+def exclude_outlines(config):
+    for outline in config.get('exclude_files', []):
+        exclude_outline = gpd.read_file(outline)
+
+        for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
+            if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
+                continue
+            file_path = os.path.join(config["output_directory"], 'geojson_predictions', file)
+            crowns = gpd.read_file(file_path)
+            exclude_outline = exclude_outline.to_crs(crowns.crs)
+
+            # Get the bounds of the current crowns GeoDataFrame
+            file_bounds = crowns.total_bounds  # [minx, miny, maxx, maxy]
+
+            # Clip the exclude outline to the bounds of the current file to save computing time
+            exclude_outline_clipped = exclude_outline.clip(
+                box(file_bounds[0], file_bounds[1], file_bounds[2], file_bounds[3])  # Using shapely's box
+            )
+
+            # Check which geometries in 'crowns' are completely within the exclude outline
+            crowns_filtered = crowns[~crowns.geometry.within(exclude_outline_clipped.geometry.union_all())]
+
+            # Write the filtered crowns back to the original path, overwriting the original file
+            crowns_filtered.to_file(file_path, driver='GPKG')
 
 class RoundedFloatEncoder(json.JSONEncoder):
     def __init__(self, *args, precision=2, **kwargs):
@@ -41,6 +69,7 @@ def polygon_from_mask(masked_arr):
 
     Leads to a small about of data loss but does not affect performance?
     https://github.com/hazirbas/coco-json-converter/blob/master/generate_coco_json.py <-- adapted from here
+    And we adapted it from detectree2 
     """
 
     contours, _ = cv2.findContours(
@@ -64,7 +93,6 @@ def polygon_from_mask(masked_arr):
     else:
         return 0
 
-
 def get_filenames(directory: str):
     """Get the file names if no geojson is present.
 
@@ -82,7 +110,6 @@ def get_filenames(directory: str):
                 dataset_dicts.append({"file_name": file_path})
 
     return dataset_dicts
-
 
 def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger=None, verbose=False):
     """
@@ -120,20 +147,24 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
         return
 
     if logger:
-        logger.debug(f"Projecting {total_files} files to GeoJSON")
+        logger.debug(f"Projecting files to GeoJSON")
 
-    # List all TIFF files in the tiles directory
-    tiff_files = list(Path(tiles_path).rglob("*.tif"))
-
+    # List all TIFF files in the tiles directory and create a lookup dictionary for fast matching
+    tiff_files = list(Path(tiles_path).rglob("*.json"))
+    # Create a dictionary with base_name as the key for fast lookup
+    tif_lookup = {}
+    for tif_file in tiff_files:
+        tif_file = Path(tif_file)
+        base_name = tif_file.stem.replace("Prediction_", "").replace(".json", "")
+        tif_lookup[base_name] = tif_file
+        
     def get_matching_tif_path(tile_image_name):
         """
         Finds the corresponding TIFF path for the given tile image name based on the start of the filename.
         """
         base_name = tile_image_name.replace("Prediction_", "").replace(".json", "")
-        for tif_file in tiff_files:
-            if tif_file.name.startswith(base_name):  # Compare the start of the TIFF filename
-                return tif_file  # Return the first matching TIFF file found
-        return None  # No matching TIFF found
+        # Lookup the TIFF file directly in the dictionary
+        return tif_lookup.get(base_name)  # Return None if no match is found
 
     def extract_base_image_name(tif_path):
         """
@@ -165,10 +196,13 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
             if os.path.isfile(output_geo_file):
                 logger.debug(f"file {tile_image_name} already processed for projecting to geojson/gpkg")
                 return
-
-            with rasterio.open(tifpath) as data:
-                epsg = CRS.from_string(data.crs.wkt).to_epsg()
-                raster_transform = data.transform
+            
+            metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
+            with open(metadata_path, "r") as meta_file:
+                metadata = json.load(meta_file)
+                epsg = metadata["crs"]
+                raster_transform = metadata["transform"]
+            raster_transform = Affine(*metadata["transform"]) if not isinstance(metadata["transform"], Affine) else metadata["transform"]
 
             # Load the prediction JSON
             with open(filename, "r") as prediction_file:
@@ -215,7 +249,6 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
     if logger and verbose:
         logger.debug("GeoJSON/GPKG projection complete.")
 
-
 def filename_geoinfo(filename):
     """Return geographic info of a tile from its filename.
 
@@ -230,7 +263,6 @@ def filename_geoinfo(filename):
     buffer = parts[3]
     crs = parts[4]
     return (minx, miny, width, buffer, crs)
-
 
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
     """Generate bounding box from geographic specifications.
@@ -257,7 +289,6 @@ def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0)
     geo = gpd.GeoDataFrame({"geometry": bbox}, index=[0], crs=CRS.from_epsg(crs))
     return geo
 
-
 def box_filter(filename, shift: int = 0):
     """Create a bounding box from a file name to filter edge crowns.
 
@@ -273,7 +304,6 @@ def box_filter(filename, shift: int = 0):
     minx, miny, width, buffer, crs = filename_geoinfo(filename)
     bounding_box = box_make(minx, miny, width, buffer, crs, shift)
     return bounding_box
-
 
 def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simplify_tolerance=0.2):
     """
@@ -365,12 +395,10 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
 
     return crowns
 
-
 def calc_iou(shape1, shape2):
     """Calculate the IoU of two shapes."""
     iou = shape1.intersection(shape2).area / shape1.union(shape2).area
     return iou
-
 
 def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Round the coordinates of the geometries in the GeoDataFrame."""
@@ -391,7 +419,6 @@ def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     crowns['geometry'] = crowns['geometry'].apply(round_geometry)
 
     return crowns
-
 
 def clean_crowns(crowns: gpd.GeoDataFrame,
                  iou_threshold: float = 0.7,
@@ -494,7 +521,6 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
         crowns_out = crowns_out[crowns_out[field] > confidence]
 
     return crowns_out.reset_index(drop=True)
-
 
 def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=None):
     """
@@ -620,7 +646,6 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                 
                 # Save the fused result as a new GeoJSON file
                 fused_shapes.to_file(output_path, driver="GPKG")
-
 
 def delete_contents(out_dir, logger=None):
     # Check for existing files and remove them synchronously

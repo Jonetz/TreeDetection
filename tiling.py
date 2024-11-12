@@ -38,7 +38,6 @@ def tile_single_file(
     with rasterio.open(data_path) as data:
         out_path = Path(out_dir)
         os.makedirs(out_path, exist_ok=True)
-        crs = rasterio.CRS.from_string(data.crs.wkt)
         crs = data.crs.to_epsg()
         
         tilename = Path(data.name).stem
@@ -90,23 +89,19 @@ def tile_single_file(
                     out_meta.update({"dtype": "uint8"})
 
                 # Write the output TIFF file
-                out_tif = out_path_root.with_suffix(".tif")
+                meta_name = out_path_root.with_suffix(".json")
                 if not os.path.exists(out_path_root.parent):
                     os.makedirs(out_path_root.parent)
 
-                try:
-                    with rasterio.open(out_tif, "w", **out_meta) as dest:
-                        dest.write(out_img)
-                except Exception as e:
-                    logger.error(f"Failed to write {out_tif}: {e}")
-                if not os.path.exists(out_tif):
-                    logger.error(f'Out tif does not exist {out_tif}')
+                metadata = {"crs": crs, "transform": out_transform}
+                with open(meta_name, "w") as meta_file:
+                    json.dump(metadata, meta_file)
 
-                # Read the saved TIFF file and convert to RGB for PNG output
-                arr = rasterio.open(out_tif).read()
-                rgb = np.dstack((arr[2], arr[1], arr[0]))  # BGR for cv2
-                rgb_rescaled = 255 * rgb / 65535 if np.max(arr[1]) > 255 else rgb
+                # Use the in-memory `out_img` array directly to create the RGB for PNG output
+                rgb = np.dstack((out_img[2], out_img[1], out_img[0]))  # BGR for cv2
+                rgb_rescaled = 255 * rgb / 65535 if np.max(out_img[1]) > 255 else rgb
                 cv2.imwrite(str(out_path_root.with_suffix(".png").resolve()), rgb_rescaled)
+
 
 def tile_data(
     file_list: list,
