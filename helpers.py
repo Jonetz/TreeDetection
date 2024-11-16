@@ -587,3 +587,43 @@ def delete_contents(out_dir, logger=None):
                     logger.error(f"Failed to delete {file_path}: {e}")
                 else:
                     print(f"Failed to delete {file_path}: {e}")
+
+def euclidean_distance(point1, point2):
+    return np.sqrt(np.power(point1.x-point2.x, 2.0) + np.power(point1.y-point2.y, 2.0))
+
+def ndvi_index(nir_value, red_color_value):
+    return (nir_value - red_color_value) / (nir_value + red_color_value)
+
+def export_ndvi_image(rgb_path, infrared_path):
+    if not os.path.exists(rgb_path) or not os.path.isfile(rgb_path):
+        raise FileNotFoundError(f" RGB File not found: {rgb_path}")
+
+    if not os.path.exists(infrared_path) or not os.path.isfile(infrared_path):
+        raise FileNotFoundError(f" Infrared File not found: {infrared_path}")
+
+    with rasterio.open(rgb_path) as rgb_src:
+        rgb_array = rgb_src.read()
+
+    # Load the second image
+    with rasterio.open(infrared_path) as infrared_src:
+        infrared_array = infrared_src.read()
+
+    ndvi_array = np.zeros(shape=infrared_array.shape)
+
+    rgb_normalized = rgb_array / 255.0
+    nir_normalized = infrared_array / 255.0
+
+    for i in range(rgb_normalized.shape[1]):
+        for j in range(rgb_normalized.shape[2]):
+            ndvi_array[0, i, j] = ndvi_index(nir_normalized[0, i, j], rgb_normalized[0, i, j])
+
+    ndvi_flattened = np.squeeze(ndvi_array)
+
+    image_min = np.min(ndvi_flattened)
+    image_max = np.max(ndvi_flattened)
+
+    # Normalize the values to 0–1
+    normalized_image = (ndvi_flattened - image_min) / (image_max - image_min) * 255.0
+
+    out_path_root_png = Path("test.png")
+    cv2.imwrite(str(out_path_root_png), normalized_image)
