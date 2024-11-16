@@ -103,9 +103,22 @@ def tile_single_file(
 
                 # Read the saved TIFF file and convert to RGB for PNG output
                 arr = rasterio.open(out_tif).read()
+
+                # Get RGB information
                 rgb = np.dstack((arr[2], arr[1], arr[0]))  # BGR for cv2
                 rgb_rescaled = 255 * rgb / 65535 if np.max(arr[1]) > 255 else rgb
-                cv2.imwrite(str(out_path_root.with_suffix(".png").resolve()), rgb_rescaled)
+
+                # Export RGB information to its own file
+                out_path_root_png = Path(str(out_path_root) + ".png")
+                cv2.imwrite(str(out_path_root_png), rgb_rescaled)
+
+                # Get infrared information
+                infrared = arr[3]
+                infrared_rescaled = 255 * rgb / 65535 if np.max(arr[3]) > 255 else infrared
+
+                # Export infrared information to its own file
+                infrared_out_path_root = Path(str(out_path_root) + "_infrared.png")
+                cv2.imwrite(str(infrared_out_path_root), infrared_rescaled)
 
 def tile_data(
     file_list: list,
@@ -155,7 +168,7 @@ def tile_data(
                     tile_height,
                     dtype_bool,
                     logger
-                )         
+                )
     """
     # Tiles multiple raster files in parallel and saves the output tiles.
     with ProcessPoolExecutor(max_workers=1) as executor:
