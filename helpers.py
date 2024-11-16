@@ -594,7 +594,8 @@ def euclidean_distance(point1, point2):
 
 @numba.jit
 def ndvi_index(nir_value, red_color_value):
-    ndvi_value = (nir_value - red_color_value) / (nir_value + red_color_value)
+    epsilon = 1e-10
+    ndvi_value = (nir_value - red_color_value) / (nir_value + red_color_value + epsilon)
     if ndvi_value < -1.0 or ndvi_value > 1.0:
         raise ValueError(f"NDVI value out of range: {ndvi_value}")
     return ndvi_value
