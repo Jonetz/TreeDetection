@@ -8,6 +8,7 @@ import warnings
 import traceback
 import shutil
 import time
+import numba
 
 import geopandas as gpd
 import pandas as pd
@@ -591,10 +592,20 @@ def delete_contents(out_dir, logger=None):
 def euclidean_distance(point1, point2):
     return np.sqrt(np.power(point1.x-point2.x, 2.0) + np.power(point1.y-point2.y, 2.0))
 
+@numba.jit
 def ndvi_index(nir_value, red_color_value):
-    return (nir_value - red_color_value) / (nir_value + red_color_value)
+    ndvi_value = (nir_value - red_color_value) / (nir_value + red_color_value)
+    if ndvi_value < -1.0 or ndvi_value > 1.0:
+        raise ValueError(f"NDVI value out of range: {ndvi_value}")
+    return ndvi_value
 
-def export_ndvi_image(rgb_path, infrared_path):
+@numba.jit
+def ndvi_index_from_rgbi(rgbi_array, i, j):
+    nir_value = rgbi_array[3, i, j] / 255.0
+    red_color_value = rgbi_array[0, i, j] / 255.0
+    return ndvi_index(nir_value, red_color_value)
+
+def create_ndvi_image_from_rgb_nir(rgb_path, infrared_path, ndvi_path):
     if not os.path.exists(rgb_path) or not os.path.isfile(rgb_path):
         raise FileNotFoundError(f" RGB File not found: {rgb_path}")
 
@@ -625,5 +636,34 @@ def export_ndvi_image(rgb_path, infrared_path):
     # Normalize the values to 0–1
     normalized_image = (ndvi_flattened - image_min) / (image_max - image_min) * 255.0
 
-    out_path_root_png = Path("test.png")
+    out_path_root_png = Path(ndvi_path)
+    cv2.imwrite(str(out_path_root_png), normalized_image)
+
+
+def create_ndvi_image_from_rgbi(rgbi_path, ndvi_path):
+    if not os.path.exists(rgbi_path) or not os.path.isfile(rgbi_path):
+        raise FileNotFoundError(f" RGB File not found: {rgbi_path}")
+
+    with rasterio.open(rgbi_path) as rgb_src:
+        rgbi_array = rgb_src.read()
+
+    ndvi_array = np.zeros(shape=(rgbi_array.shape[1], rgbi_array.shape[2]))
+
+    rgb_normalized = rgbi_array / 255.0
+
+    for i in range(rgb_normalized.shape[1]):
+        for j in range(rgb_normalized.shape[2]):
+            ndvi_array[i, j] = ndvi_index(rgb_normalized[3, i, j], rgb_normalized[0, i, j])
+
+    ndvi_flattened = np.squeeze(ndvi_array)
+
+    image_min = np.min(ndvi_flattened)
+    image_max = np.max(ndvi_flattened)
+
+    # Normalize the values to 0–1
+    normalized_image = (ndvi_flattened - image_min) / (image_max - image_min) * 255.0
+
+    print(normalized_image.shape)
+
+    out_path_root_png = Path(ndvi_path)
     cv2.imwrite(str(out_path_root_png), normalized_image)

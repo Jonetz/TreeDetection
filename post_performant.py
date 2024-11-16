@@ -1,10 +1,13 @@
 import json
 import os
+import sys
+
 import rasterio
 import fiona
 import numpy as np
 import re
 import warnings
+import numba
 
 from shapely.geometry import shape, Point
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +18,9 @@ import cProfile
 import pstats
 import io
 
+from helpers import euclidean_distance, ndvi_index_from_rgbi
+
+#@numba.jit
 def raster_to_geo(transform, row, col):
     """
     Convert raster coordinates to geographical coordinates.
@@ -30,6 +36,7 @@ def raster_to_geo(transform, row, col):
     x, y = transform * (col, row)
     return x, y
 
+#@numba.jit
 def geo_to_raster(transform, x, y):
     """
     Convert geographical coordinates to raster coordinates.
@@ -263,6 +270,53 @@ def get_height_within_polygon(polygon, height_data, transform, width, height, bo
 
     return max_height, max_coordinates
 
+#@numba.jit
+def get_ndvi_within_polygon(polygon, rgbi_data, transform, width, height, bounds):
+    # Calculate mean NDVI within the polygon
+    # Maybe something between max and mean
+    minx, miny, maxx, maxy = polygon.bounds
+    minx, maxx = sorted([minx, maxx])
+    miny, maxy = sorted([miny, maxy])
+
+    if maxx < bounds.left or minx > bounds.right or maxy < bounds.bottom or miny > bounds.top:
+        print(f"Polygon bounds {minx, miny, maxx, maxy} are out of raster bounds.")
+        return -1, None
+
+    min_col, min_row = geo_to_raster(transform, minx, miny)
+    max_col, max_row = geo_to_raster(transform, maxx, maxy)
+
+    min_row, max_row = sorted([min_row, max_row])
+    min_col, max_col = sorted([min_col, max_col])
+
+    min_row, min_col = max(0, min_row), max(0, min_col)
+    max_row, max_col = min(height - 1, max_row), min(width - 1, max_col)
+
+    subset = rgbi_data[:, min_row:max_row + 1, min_col:max_col + 1]
+    ndvi_values = []
+    coordinates = []
+
+    for r in range(subset.shape[1]):
+        for c in range(subset.shape[2]):
+            x, y = raster_to_geo(transform, r + min_row, c + min_col)
+            ndvi_value = ndvi_index_from_rgbi(subset, r, c)
+            ndvi_values.append(ndvi_value)
+            coordinates.append((x, y))
+            # x, y = raster_to_geo(transform, r + min_row, c + min_col)
+            # if polygon.contains(Point(x, y)):
+            #     ndvi_value = ndvi_index_from_rgbi(subset, r, c)
+            #     ndvi_values.append(ndvi_value)
+            #     coordinates.append((x, y))
+
+    if len(ndvi_values) > 0:
+        max_ndvi = max(ndvi_values)
+        mean_ndvi = np.mean(ndvi_values)
+        max_index = ndvi_values.index(max_ndvi)
+        max_coordinates = coordinates[max_index]
+
+        return max_ndvi, mean_ndvi, max_coordinates
+    return 0, 0, None
+
+
 def get_centroid(polygon):
     """
     Calculate the centroid of a polygon.
@@ -276,11 +330,9 @@ def get_centroid(polygon):
     centroid = polygon.centroid
     return (centroid.x, centroid.y)
 
-def euclidean_distance(point1, point2):
-    return np.sqrt(np.power(point1.x-point2.x, 2.0) + np.power(point1.y-point2.y, 2.0))
 
 
-def process_feature(feature, polygon_dict, id_to_area, containment_threshold, height_data, transform, width, height, bounds, spatial_idx):
+def process_feature(feature, polygon_dict, id_to_area, containment_threshold, height_data, rgbi_data, transform, width, height, bounds, spatial_idx):
     """
     Process a single feature to update its properties with additional information.
 
@@ -317,6 +369,9 @@ def process_feature(feature, polygon_dict, id_to_area, containment_threshold, he
     if highest_point is None:
         height = -1
 
+
+    max_ndvi, mean_ndvi, max_ndvi_point = get_ndvi_within_polygon(polygon, rgbi_data, transform, rgbi_data.shape[1], rgbi_data.shape[2], bounds)
+
     centroid = get_centroid(polygon)
 
     new_properties = dict(feature['properties'])
@@ -325,6 +380,8 @@ def process_feature(feature, polygon_dict, id_to_area, containment_threshold, he
     new_properties['ContainedCount'] = contained_count
     new_properties['TreeHeight'] = float(height) if height is not None else None
     new_properties['Centroid'] = {'x': float(centroid[0]), 'y': float(centroid[1])}
+    new_properties['MeanNDVI'] = mean_ndvi
+    new_properties['MaxNDVI'] = max_ndvi
 
     new_feature = {
         'type': 'Feature',
@@ -405,7 +462,7 @@ def update_feature_visualization(updated_features, contained_ids_per_feature, co
 
     return updated_features
 
-def process_geojson(data, confidence_threshold, containment_threshold, height_data_path):
+def process_geojson(data, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path):
     """
     Process a GeoJSON object to update features with additional properties based on containment and height data.
 
@@ -444,15 +501,27 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
 
     with rasterio.open(height_data_path) as src:
         height_data = src.read(1)
-        transform = src.transform
-        width_tif, height_tif = src.width, src.height
-        bounds = src.bounds
+        height_transform = src.transform
+        height_width_tif, height_height_tif = src.width, src.height
+        height_bounds = src.bounds
+
+    with rasterio.open(rgbi_data_path) as src:
+        rgbi_data = src.read()
+        nir_transform = src.transform
+        nir_width_tif, nir_height_tif = src.width, src.height
+        nir_bounds = src.bounds
+
+    # if height_width_tif != nir_width_tif or height_height_tif != nir_height_tif or height_bounds != nir_bounds:
+    #     raise ValueError(f"Height and NIR data have different dimensions. Height Width: {height_width_tif}, Height Height: {height_height_tif}, NIR Height: {nir_height_tif}, NIR Width: {nir_width_tif}")
+    #     # TODO also check for transform?
+
+
 
     updated_features = []
     contained_ids_per_feature = {}
 
     for feature in filtered_features:
-        feature, contained_ids = process_feature(feature, polygon_dict, id_to_area, containment_threshold, height_data, transform, width_tif, height_tif, bounds, spatial_idx)
+        feature, contained_ids = process_feature(feature, polygon_dict, id_to_area, containment_threshold, height_data, rgbi_data, height_transform, height_width_tif, height_height_tif, height_bounds, spatial_idx)
         contained_ids_per_feature[feature['properties']['poly_id']] = contained_ids
         feature['properties']['ContainedIDs'] = str(contained_ids)
         updated_features.append(feature)
@@ -479,7 +548,7 @@ def order_properties(feature, schema_properties):
     feature['properties'] = ordered_properties
     return feature
 
-def process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_data_path):
+def process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path):
     """
     Process a single GeoJSON file and save the results to a new file.
 
@@ -500,7 +569,7 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         "features": features
     }
 
-    processed_data = process_geojson(data, confidence_threshold, containment_threshold, height_data_path)
+    processed_data = process_geojson(data, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path)
 
 
     new_schema = schema.copy()
@@ -513,11 +582,13 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         'Centroid': 'str',
         'ContainedIDs': 'str',
         'IsSurrounded': 'int',
-        'visualize': 'int'
+        'visualize': 'int',
+        'MeanNDVI': 'float',
+        'MaxNDVI': 'float'
     }
     new_schema['properties'] = new_properties_schema
 
-    
+    print(new_schema)
     # Filter features based on the provided conditions
     filtered_features = []
     for feature in processed_data["features"]:
@@ -537,7 +608,7 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         for feature in filtered_features:
             dest.write(feature)
 
-def process_files_in_directory(directory, height_directory, confidence_threshold, containment_threshold, parallel=True, filename_pattern=None):
+def process_files_in_directory(directory, height_directory, image_directory, confidence_threshold, containment_threshold, parallel=True, filename_pattern=None):
     """
     Process all GeoJSON files in a directory and save the results.
 
@@ -548,19 +619,23 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         containment_threshold (float): Threshold for polygon containment.
         parallel (bool): Whether to process files in parallel (default is True).
     """
-    geojson_files = [f for f in os.listdir(directory) if f.endswith('.geojson')]
-    
-    if filename_pattern is None:
-        height_data_pattern = "(\\d+)\\.tif"
-        image_pattern = "(\\d+)\\.tif"
 
-    height_data_pattern, image_pattern = filename_pattern
+    geojson_files = [f for f in os.listdir(directory) if f.endswith('.geojson')]
+
+    if filename_pattern is None:
+        height_data_pattern = "(\\d+)"
+        image_pattern = "(\\d+)"
+    else:
+        height_data_pattern, image_pattern = filename_pattern
+
     if height_data_pattern is None:
         height_data_pattern = "(\\d+)\\.tif"
     if image_pattern is None:
         image_pattern = "(\\d+)\\.tif"
+
     image_pattern = re.compile(image_pattern)
     height_data_pattern = re.compile(height_data_pattern)
+
 
     def find_matching_height_file(base_name):
         """Find a matching height data file based on regex groups from the base name."""
@@ -573,6 +648,17 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
                     return os.path.join(height_directory, height_file)
         return None
 
+    def find_matching_image_file(base_name):
+        """Find a matching height data file based on regex groups from the base name."""
+        geojson_match = image_pattern.match(base_name)
+        if geojson_match:
+            geojson_groups = geojson_match.groups()  # Capture groups for matching
+            for height_file in os.listdir(image_directory):
+                height_match = height_data_pattern.match(height_file)
+                if height_match and height_match.groups()[:len(geojson_groups)] == geojson_groups:
+                    return os.path.join(image_directory, height_file)
+        return None
+
 
     if not parallel:
         # Sequential processing
@@ -580,10 +666,11 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
             file_path = os.path.join(directory, filename)
             base_name = os.path.splitext(os.path.basename(filename))[0]
             height_file_path = find_matching_height_file(base_name)
+            image_file_path = find_matching_image_file(base_name)
 
-            if height_file_path:
+            if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
-                process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path)
+                process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path, image_file_path)
             else:
                 warnings.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
     else:
@@ -594,10 +681,11 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
                 file_path = os.path.join(directory, filename)
                 base_name = os.path.splitext(os.path.basename(filename))[0]
                 height_file_path = find_matching_height_file(base_name)
+                image_file_path = find_matching_image_file(base_name)
 
-                if height_file_path:
+                if height_file_path and image_file_path:
                     processed_file_path = os.path.join(directory, f"processed_{filename}")
-                    futures.append(executor.submit(process_single_file, file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path))
+                    futures.append(executor.submit(process_single_file, file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path, image_file_path))
                 else:
                     warnings.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
 
@@ -617,8 +705,9 @@ def profile_code():
 
     geojson_directory = 'C:\\Users\\jonas\\Documents\\GitHub\\tree_detection\\postprocessing\\predictions\\raw'
     height_directory = 'C:\\Users\\jonas\\Documents\\GitHub\\tree_detection\\postprocessing\\nDOM'
+    image_directory = 'data/rgb'
 
-    process_files_in_directory(geojson_directory, height_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=False)
+    process_files_in_directory(geojson_directory, height_directory, image_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=False)
 
     pr.disable()
     
@@ -633,6 +722,7 @@ if __name__ == "__main__":
 
     geojson_directory = 'output/geojson_predictions'
     height_directory = 'data/nDSM'
+    image_directory = 'data/rgb'
 
 
-    process_files_in_directory(geojson_directory, height_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=False)
+    process_files_in_directory(geojson_directory, height_directory, image_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=False)

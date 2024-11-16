@@ -31,7 +31,7 @@ def postprocess_files(config):
     """
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
     # 1. Filter with post-processing rules 
-    process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
+    process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'], config['image_directory'],\
                                 confidence_threshold=config['confidence_threshold'], containment_threshold=config['containment_threshold'],\
                                 parallel=True, filename_pattern=filename_pattern)
     logger = config["logger"]
@@ -324,7 +324,7 @@ def profile_code(config):
     logger.info(s.getvalue())
     
 if __name__ == "__main__":
-    config = get_config("/home/jonas/TreeDetection/config.yml")
+    config = get_config("config.yml")
 
     # Print Information about the configuration
 
