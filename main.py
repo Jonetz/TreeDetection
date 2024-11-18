@@ -36,7 +36,7 @@ def postprocess_files(config):
     
     # 1. Filter with exclude outlines
     logger.info("Excluding Outlines.")
-    exclude_outlines(config)
+    #exclude_outlines(config)
 
     # 2. Filter with post-processing rules 
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
@@ -277,10 +277,10 @@ def process_files(config):
     Process the files according to the configuration.
     """
     # Read the files and tile them
-    #preprocess_files(config)
+    preprocess_files(config)
 
     # Predict the tiles
-    #predict_tiles(config)
+    predict_tiles(config)
 
     # Post-process the predictions
     postprocess_files(config)

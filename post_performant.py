@@ -18,12 +18,7 @@ import pstats
 import io
 
 import numpy as np
-from shapely.geometry import box
-from shapely.ops import unary_union
-from numba import njit, prange
 import cupy as cp
-
-from cupy.cuda import stream
 
 def convert_to_python_types(data):
     """
@@ -131,10 +126,11 @@ def geo_to_raster_batch(transform, x, y):
     row = (y - f) / e    
     return cp.floor(row).astype(cp.int32), cp.floor(col).astype(cp.int32)
 
-def is_point_in_polygon_batch(polygon_x, polygon_y, px, py):
+def is_point_in_polygon_batch(center_x, center_y, radius, px, py):
     """
-    Vectorized check if points are inside the polygon using ray-casting for batches of points.
-    Returns a boolean mask where True indicates the point is inside the polygon.
+    Vectorized check if points are inside a circle approximated by the bounding box of the polygon.
+    The center of the circle is the centroid of the bounding box, and the radius is the maximum distance
+    from the center to any point in the bounding box.
     
     Arguments:
     - polygon_x: (num_vertices, ) x-coordinates of the polygon's vertices
@@ -142,27 +138,13 @@ def is_point_in_polygon_batch(polygon_x, polygon_y, px, py):
     - px, py: (batch_size, ) x and y coordinates of the points to check
     
     Returns:
-    - inside_mask: (batch_size, ) Boolean array where True indicates the point is inside the polygon
+    - inside_mask: (batch_size, ) Boolean array where True indicates the point is inside the circle
     """
-    num_vertices = polygon_x.shape[0]
-    batch_size = px.shape[0]
     
-    # Initialize inside mask
-    inside_mask = cp.zeros(batch_size, dtype=cp.bool_)
-
-    # Loop over each edge of the polygon
-    for i in range(num_vertices):
-        p1x, p1y = polygon_x[i], polygon_y[i]
-        p2x, p2y = polygon_x[(i + 1) % num_vertices], polygon_y[(i + 1) % num_vertices]
-        
-        # Ensure px and py are broadcasted to match the shape of the polygon vertices
-        condition = (py[:, None] > cp.minimum(p1y, p2y)) & (py[:, None] <= cp.maximum(p1y, p2y)) & (px[:, None] <= cp.maximum(p1x, p2x))
-        
-        # Calculate the intersection of the ray with the edge
-        xinters = (py[:, None] - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-        
-        # Update the inside mask by toggling with XOR (ray-casting)
-        inside_mask = inside_mask ^ (condition & (px[:, None] <= xinters)).any(axis=1)
+    # Calculate the squared distance from each point to the circle center
+    dist_squared = (px - center_x) ** 2 + (py - center_y) ** 2
+    # Return True if the distance is less than or equal to the radius squared
+    inside_mask = dist_squared <= radius ** 2
     
     return inside_mask
 
@@ -216,14 +198,31 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
     max_heights = cp.zeros(num_polygons, dtype=cp.float32)
     max_coordinates = cp.zeros((num_polygons, 2), dtype=cp.float32)
 
+    centers = cp.zeros((num_polygons, 2), dtype=cp.float32)
+
     # Process each polygon in parallel
     for i in range(num_polygons):
         # Get current polygon coordinates
         polygon_x_i, polygon_y_i = polygon_x[i], polygon_y[i]
         
-        # Check if points are inside the polygon using a vectorized function
-        inside_mask = is_point_in_polygon_batch(polygon_x_i, polygon_y_i, x_coords_gpu, y_coords_gpu)
+        valid_mask = ~cp.isnan(polygon_x_i) & ~cp.isnan(polygon_y_i)  # Mask to remove NaNs
+        valid_x = polygon_x_i[valid_mask]
+        valid_y = polygon_y_i[valid_mask]
         
+        # Compute the center of the bounding box for the polygon (after filtering NaNs)
+        min_x, max_x = valid_x.min(), valid_x.max()
+        min_y, max_y = valid_y.min(), valid_y.max()
+        
+        center_x = (min_x + max_x) / 2
+        center_y = (min_y + max_y) / 2
+        centers[i] = cp.array([center_x, center_y])
+
+        # Compute the radius of the bounding box for the polygon
+        radius = (max_x - min_x) + (max_y - min_y) / 4
+        
+        # Check if points are inside the polygon using a vectorized function
+        inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu,)
+                
         # Extract heights and coordinates where points are inside the polygon
         inside_heights = subset.flatten()[inside_mask]
         inside_coords = np.column_stack([x_coords_gpu[inside_mask], y_coords_gpu[inside_mask]])
