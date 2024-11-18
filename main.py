@@ -33,17 +33,19 @@ def postprocess_files(config):
     logger = config["logger"]
     logger.info("Postprocessing the predictions.")
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
-    # 1. Filter with post-processing rules 
+    
+    # 1. Filter with exclude outlines
+    logger.info("Excluding Outlines.")
+    exclude_outlines(config)
+
+    # 2. Filter with post-processing rules 
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
                                 confidence_threshold=config['confidence_threshold'], containment_threshold=config['containment_threshold'],\
-                                parallel=True, filename_pattern=filename_pattern)
-    logger.info("Excluding Outlines.")
-    # 2. Filter with exclude outlines
-    exclude_outlines(config)
+                                parallel=False, filename_pattern=filename_pattern)
 
     # 4. Save the final predictions as gpkg in another folder 
     for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
-        if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
+        if not (file.endswith('.geojson') or file.endswith('.gpkg')) or file.startswith('processed_'):
             continue
         crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
@@ -135,22 +137,21 @@ def predict_tiles(config):
     """
     Predict the tiles according to the configuration.
     """
+    logger = config["logger"]
+
     # 1. If urban model is available, predict the tiles using the urban model
     if config["urban_model"] and os.path.exists(config["urban_model"]) and \
             config["forrest_model"] and os.path.exists(config["forrest_model"]) and \
             config["forrest_outline"] and os.path.exists(config["forrest_outline"]):
 
-        logger = config["logger"]
         urban_fold = os.path.join(config["output_directory"], "urban_geojson")
         forrest_fold = os.path.join(config["output_directory"], "forrest_geojson")
-        '''
         # Predict the tiles using the urban model
         predict_on_model(config, config["urban_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "urban_predictions"))
         # Predict the tiles using the forrest model
         predict_on_model(config, config["forrest_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "forrest_predictions"))
-        '''
         # Project the predictions back to the geographic space
         project_to_geojson(config["tiles_path"], pred_fold=os.path.join(config["output_directory"], "urban_predictions"), \
                            output_fold=urban_fold, max_workers=config["num_workers"], \
@@ -184,7 +185,19 @@ def predict_tiles(config):
         # TODO: Save processed files for reprocessing avoidance
         # TODO Safe the filepaths of every processed file to the continue file to avoid reprocessing
     elif config["combined_model"] and os.path.exists(config["combined_model"]):
-        pass
+        predict_on_model(config, config["combined_model"], config["tiles_path"], config["output_directory"])
+        geojson_fold = os.path.join(config["output_directory"], "geojson_fold")
+        project_to_geojson(config["tiles_path"], pred_fold=config["output_directory"], output_fold=geojson_fold, max_workers=config["num_workers"], \
+                            logger=config["logger"], verbose=config["verbose"])        
+        folders = [f for f in os.listdir(geojson_fold) if os.path.isdir(os.path.join(geojson_fold, f))]
+        for folder in folders:
+            output_path = os.path.join(geojson_fold, os.path.basename(folder) + ".gpkg")
+            if os.path.isfile(output_path):
+                logger.debug(f"folder {folder} already processed for predicting tiles")
+                continue
+            crowns = stitch_crowns(os.path.join(geojson_fold, folder), max_workers=config["num_workers"],
+                                    logger=config["logger"], simplify_tolerance=config['simplify_tolerance'])
+        logger.info("Stitching has been completed.")
     else:
         raise FileNotFoundError(
             "No model available for prediction. Either urban model or forrest model + outline or combined model must be available.")
@@ -267,7 +280,7 @@ def process_files(config):
     #preprocess_files(config)
 
     # Predict the tiles
-    predict_tiles(config)
+    #predict_tiles(config)
 
     # Post-process the predictions
     postprocess_files(config)
@@ -275,7 +288,8 @@ def process_files(config):
     shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
     for folder in os.listdir(config["output_directory"]):
         folder = os.path.join(config["output_directory"], folder)
-        if os.path.isdir(folder) and os.path.basename(folder) != "logs" and not config.get('keep_intermediate', False):
+        keep_folders = ["processed_exclusions", "logs"]
+        if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get('keep_intermediate', False):
             shutil.rmtree(folder)
 
     # Print stats about the processing
