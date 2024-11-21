@@ -323,7 +323,7 @@ def profile_code(config, threshold = 0.05):
 
 
 if __name__ == "__main__":
-    config = get_config("/home/jonas/TreeDetection/config.yml")
+    config = get_config("config.yml")
 
     # Print Information about the configuration
 
