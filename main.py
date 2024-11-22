@@ -9,20 +9,17 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import get_filenames, project_to_geojson, stitch_crowns, clean_crowns, fuse_predictions, delete_contents, RoundedFloatEncoder, exclude_outlines
+from helpers import get_filenames, process_and_stitch_predictions, fuse_predictions, delete_contents, RoundedFloatEncoder, exclude_outlines
 from post_performant import process_files_in_directory
 
 from detectron2.engine import DefaultPredictor
 from detectron2.evaluation.coco_evaluation import instances_to_coco_json
 
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 import json, cv2
 import geopandas as gpd
 import shutil
-import typing
 from torch.amp import autocast
-from shapely.geometry import box
 
 gpd.options.display_precision = 2
 
@@ -37,9 +34,10 @@ def postprocess_files(config):
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
                                 confidence_threshold=config['confidence_threshold'], containment_threshold=config['containment_threshold'],\
                                 parallel=True, filename_pattern=filename_pattern)
-    logger.info("Excluding Outlines.")
+    
     # 2. Filter with exclude outlines
-    exclude_outlines(config)
+    #exclude_outlines(config)
+    # logger.info("Excluding Outlines.")
 
     # 4. Save the final predictions as gpkg in another folder 
     for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
@@ -130,7 +128,6 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50)
     if config.get("verbose", False) and logger:
         logger.info(f"Processed {total_files}/{total_files} images")
 
-
 def predict_tiles(config):
     """
     Predict the tiles according to the configuration.
@@ -143,46 +140,50 @@ def predict_tiles(config):
         logger = config["logger"]
         urban_fold = os.path.join(config["output_directory"], "urban_geojson")
         forrest_fold = os.path.join(config["output_directory"], "forrest_geojson")
-        '''
         # Predict the tiles using the urban model
         predict_on_model(config, config["urban_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "urban_predictions"))
         # Predict the tiles using the forrest model
         predict_on_model(config, config["forrest_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "forrest_predictions"))
-        '''
-        # Project the predictions back to the geographic space
-        project_to_geojson(config["tiles_path"], pred_fold=os.path.join(config["output_directory"], "urban_predictions"), \
-                           output_fold=urban_fold, max_workers=config["num_workers"], \
-                            logger=config["logger"], verbose=config["verbose"])
-        project_to_geojson(config["tiles_path"], pred_fold=os.path.join(config["output_directory"], "forrest_predictions"), \
-                           output_fold=forrest_fold, max_workers=config["num_workers"], \
-                            logger=config["logger"], verbose=config["verbose"])
-        
-        logger.info("Predictions have been saved to the output directory. Begin stitching the tiles.")
-        # Stitch the predictions together
-        for top_folder in [urban_fold, forrest_fold]:
-            forrest_folders = [f for f in os.listdir(top_folder) if os.path.isdir(os.path.join(top_folder, f))]
-            for folder in forrest_folders:
-                output_path = os.path.join(top_folder, os.path.basename(folder) + ".gpkg")
-                if os.path.isfile(output_path):
-                    logger.debug(f"folder {folder} already processed for predicting tiles")
-                    continue
-                crowns = stitch_crowns(os.path.join(top_folder, folder), max_workers=config["num_workers"],
-                                       logger=config["logger"], simplify_tolerance=config['simplify_tolerance'])
-                # TODO Instead of using the clean crowns function use our own post-processing function
-                # crowns = clean_crowns(crowns, iou_threshold=config["iou_threshold"], confidence=config["confidence_threshold_stitching"], logger=config["logger"])
-                crowns.to_file(output_path, driver="GPKG")
-        logger.info("Stitching has been completed. Begin fusing the predictions.")
+        # Process and stitch predictions for the urban model
+        process_and_stitch_predictions(
+            tiles_path=config["tiles_path"],
+            pred_fold=os.path.join(config["output_directory"], "urban_predictions"),
+            output_path=urban_fold,
+            max_workers=config["num_workers"],
+            shift=1,
+            simplify_tolerance=config['simplify_tolerance'],
+            logger=config["logger"],
+            verbose=config["verbose"]
+        )
+
+        # Process and stitch predictions for the forest model
+        process_and_stitch_predictions(
+            tiles_path=config["tiles_path"],
+            pred_fold=os.path.join(config["output_directory"], "forrest_predictions"),
+            output_path=forrest_fold,
+            max_workers=config["num_workers"],
+            shift=1,
+            simplify_tolerance=config['simplify_tolerance'],
+            logger=config["logger"],
+            verbose=config["verbose"]
+        )
+
+        logger.info("Predictions have been processed and stitched. Begin fusing the predictions.")
 
         # Step 4: Fusion based on forest outline
-        fuse_predictions(urban_fold, forrest_fold, config["forrest_outline"],
-                         os.path.join(config["output_directory"], 'geojson_predictions'), logger=config["logger"])
+        fuse_predictions(
+            urban_fold,
+            forrest_fold,
+            config["forrest_outline"],
+            os.path.join(config["output_directory"], 'geojson_predictions'),
+            logger=config["logger"]
+        )
 
         logger.info("Fusion based on forest outline has been completed.")
 
-        # TODO: Save processed files for reprocessing avoidance
-        # TODO Safe the filepaths of every processed file to the continue file to avoid reprocessing
+
     elif config["combined_model"] and os.path.exists(config["combined_model"]):
         pass
     else:
@@ -264,7 +265,7 @@ def process_files(config):
     Process the files according to the configuration.
     """
     # Read the files and tile them
-    #preprocess_files(config)
+    preprocess_files(config)
 
     # Predict the tiles
     predict_tiles(config)
@@ -284,19 +285,6 @@ def process_files(config):
 def profile_code(config, threshold = 0.05):
     """
     Profile the code to analyze performance using cProfile.
-
-    
-    20241024 Output:
-        1    2.244    2.244   76.155   76.155 /home/jonas/TreeDetection/main.py:24(postprocess_files)
-        1    0.000    0.000   19.579   19.579 /home/jonas/TreeDetection/main.py:211(preprocess_files)
-        1    0.275    0.275  112.214  112.214 /home/jonas/TreeDetection/main.py:151(predict_tiles)
-
-	    2    0.000    0.000   60.746   30.373 /home/jonas/TreeDetection/main.py:70(predict_on_model)
-        2    0.001    0.000   26.859   13.429 /home/jonas/TreeDetection/helpers.py:266(stitch_crowns)        
-	    1    0.000    0.000   19.579   19.579 /home/jonas/TreeDetection/tiling.py:109(tile_data)
-        1    0.242    0.242   14.098   14.098 /home/jonas/TreeDetection/helpers.py:476(fuse_predictions)
-        1    0.000    0.000   11.978   11.978 /home/jonas/TreeDetection/post_performant.py:511(process_files_in_directory)   
-        2    0.001    0.000    9.288    4.644 /home/jonas/TreeDetection/helpers.py:71(project_to_geojson)
     """
     import cProfile
     import pstats
