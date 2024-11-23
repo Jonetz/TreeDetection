@@ -8,12 +8,15 @@ import warnings
 import traceback
 import shutil
 import time
-import numba
+import numba as nb
 
 import geopandas as gpd
 import pandas as pd
 
 from pathlib import Path
+
+from matplotlib import pyplot as plt
+from matplotlib.colors import Normalize
 from rasterio.transform import xy
 from rasterio.crs import CRS
 from shapely.geometry import box, shape
@@ -592,60 +595,62 @@ def delete_contents(out_dir, logger=None):
 def euclidean_distance(point1, point2):
     return np.sqrt(np.power(point1.x-point2.x, 2.0) + np.power(point1.y-point2.y, 2.0))
 
-@numba.jit
-def ndvi_index(nir_value, red_color_value):
+
+@nb.njit(fastmath=True)
+def ndvi_index(red_value, nir_value):
+    """
+    Calculate the NDVI index from the red and NIR values.
+
+    Args:
+        red_value (float): Red channel value.
+        nir_value (float): NIR channel value.
+
+    Returns:
+        float: NDVI index value.
+    """
     epsilon = 1e-10
-    ndvi_value = (nir_value - red_color_value) / (nir_value + red_color_value + epsilon)
+    ndvi_value = (nir_value - red_value) / (nir_value + red_value + epsilon)
     if ndvi_value < -1.0 or ndvi_value > 1.0:
         raise ValueError(f"NDVI value out of range: {ndvi_value}")
     return ndvi_value
 
-@numba.jit
-def ndvi_index_from_rgbi(rgbi_array, i, j):
-    nir_value = rgbi_array[3, i, j] / 255.0
-    red_color_value = rgbi_array[0, i, j] / 255.0
-    return ndvi_index(nir_value, red_color_value)
+@nb.njit(fastmath=True)
+def ndvi_array_from_rgbi(rgbi_array: np.ndarray):
+    """
+    Calculate the NDVI index from the RGBI array.
 
-def create_ndvi_image_from_rgb_nir(rgb_path, infrared_path, ndvi_path):
-    if not os.path.exists(rgb_path) or not os.path.isfile(rgb_path):
-        raise FileNotFoundError(f" RGB File not found: {rgb_path}")
+    Args:
+        rgbi_array (np.ndarray): Array containing the RGBI values.
 
-    if not os.path.exists(infrared_path) or not os.path.isfile(infrared_path):
-        raise FileNotFoundError(f" Infrared File not found: {infrared_path}")
+    Returns:
+        np.ndarray: Array containing the NDVI index values
+    """
 
-    with rasterio.open(rgb_path) as rgb_src:
-        rgb_array = rgb_src.read()
-
-    # Load the second image
-    with rasterio.open(infrared_path) as infrared_src:
-        infrared_array = infrared_src.read()
-
-    ndvi_array = np.zeros(shape=infrared_array.shape)
-
-    rgb_normalized = rgb_array / 255.0
-    nir_normalized = infrared_array / 255.0
-
-    for i in range(rgb_normalized.shape[1]):
-        for j in range(rgb_normalized.shape[2]):
-            ndvi_array[0, i, j] = ndvi_index(nir_normalized[0, i, j], rgb_normalized[0, i, j])
-
-    ndvi_flattened = np.squeeze(ndvi_array)
-
-    image_min = np.min(ndvi_flattened)
-    image_max = np.max(ndvi_flattened)
-
-    # Normalize the values to 0–1
-    normalized_image = (ndvi_flattened - image_min) / (image_max - image_min) * 255.0
-
-    out_path_root_png = Path(ndvi_path)
-    cv2.imwrite(str(out_path_root_png), normalized_image)
+    ndvi_array = np.zeros(shape=(rgbi_array.shape[1], rgbi_array.shape[2]))
+    for i in range(rgbi_array.shape[1]):
+        for j in range(rgbi_array.shape[2]):
+            ndvi_array[i, j] = ndvi_index(rgbi_array[0, i, j] / 255.0, rgbi_array[3, i, j] / 255.0)
+    return ndvi_array
 
 
-def create_ndvi_image_from_rgbi(rgbi_path, ndvi_path):
+def create_ndvi_image_from_rgbi(rgbi_path: str, ndvi_path: str, export_tif: bool = True, export_png: bool = False):
+    """
+    Create an NDVI image from the RGBI image. Mainly for debugging purposes.
+
+    Args:
+        rgbi_path (str): Path to the RGBI image.
+        ndvi_path (str): Path to save the NDVI image.
+        export_tif (bool): Export the NDVI image as a TIFF file.
+        export_png (bool): Export the NDVI image as a PNG file
+
+    Raises:
+        FileNotFoundError: If the RGBI file is not found.
+    """
     if not os.path.exists(rgbi_path) or not os.path.isfile(rgbi_path):
         raise FileNotFoundError(f" RGB File not found: {rgbi_path}")
 
     with rasterio.open(rgbi_path) as rgb_src:
+        print(type(rgb_src))
         rgbi_array = rgb_src.read()
 
     ndvi_array = np.zeros(shape=(rgbi_array.shape[1], rgbi_array.shape[2]))
@@ -664,7 +669,53 @@ def create_ndvi_image_from_rgbi(rgbi_path, ndvi_path):
     # Normalize the values to 0–1
     normalized_image = (ndvi_flattened - image_min) / (image_max - image_min) * 255.0
 
-    print(normalized_image.shape)
-
     out_path_root_png = Path(ndvi_path)
-    cv2.imwrite(str(out_path_root_png), normalized_image)
+
+    if export_png:
+        cv2.imwrite(str(out_path_root_png), normalized_image)
+
+    if export_tif:
+        normalized_image = np.expand_dims(normalized_image, axis=0)
+        out_meta = rgb_src.meta.copy()
+
+        out_meta.update({
+            "driver": "GTiff",
+            "height": rgb_src.shape[0],
+            "width": rgb_src.shape[1],
+            "transform": rgb_src.transform,
+            "nodata": None,
+            "count": 1,
+        })
+
+        # Write the output TIFF file
+        out_tif = out_path_root_png.with_suffix(".tif")
+
+        try:
+            with rasterio.open(out_tif, "w", **out_meta) as dest:
+                dest.write(normalized_image)
+        except Exception as e:
+            print(f"Failed to write {out_tif}: {e}")
+
+
+def plot_ndvi_values(values_array: np.ndarray):
+    # Normalize the data to range [0, 1] for the colormap
+    norm = Normalize(vmin=-1, vmax=1)
+
+    # Apply the viridis colormap
+    colormap = plt.cm.viridis
+    mapped_data = colormap(norm(values_array))  # Convert normalized data to RGBA
+
+    # Specify resolution
+    width, height = 5000, 5000  # Resolution in pixels
+    dpi = 300  # Dots per inch
+    figsize = (width / dpi, height / dpi)  # Size of the figure in inches
+
+    # Create and save the image
+    plt.figure(figsize=figsize, dpi=dpi)
+    plt.imshow(mapped_data, origin='upper')
+    plt.axis('off')  # Turn off axes for visualization
+    plt.savefig("viridis_image_high_res.png", dpi=dpi, bbox_inches='tight', pad_inches=0)
+    plt.show()
+
+if __name__ == "__main__":
+    create_ndvi_image_from_rgbi("data/rgb/324125317.tif", "data/rgb//324125317_new.png")
