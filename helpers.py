@@ -781,11 +781,6 @@ def delete_contents(out_dir, logger=None):
                 else:
                     print(f"Failed to delete {file_path}: {e}")
 
-
-def euclidean_distance(point1, point2):
-    return np.sqrt(np.power(point1.x-point2.x, 2.0) + np.power(point1.y-point2.y, 2.0))
-
-
 @nb.njit(fastmath=True)
 def ndvi_index(red_value, nir_value):
     """
