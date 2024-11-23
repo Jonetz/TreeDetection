@@ -252,6 +252,58 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
 
     return max_heights, max_coordinates
 
+# TODO: Port to GPU
+def get_ndvi_within_polygon(polygon, ndvi_data: np.ndarray, transform: Affine, width: int, height: int, bounds: BoundingBox):
+    """
+    Find the minimum, maximum, and mean NDVI values within a polygon from raster NDVI data.
+
+    Args:
+        polygon (shapely.geometry.Polygon): Polygon defining the area of interest.
+        ndvi_data (numpy.ndarray): 2D array of NDVI data from the raster.
+        transform (Affine): Transformation matrix for geo to raster / raster to geo coordinates.
+        width (int): Width of the raster in pixels.
+        height (int): Height of the raster in pixels.
+        bounds (BoundingBox): Bounds of the raster.
+
+    Returns:
+        tuple: (min_ndvi, max_ndvi, mean_ndvi)
+            - min_ndvi (float): Minimum NDVI value within the polygon.
+            - max_ndvi (float): Maximum NDVI value within the polygon.
+            - mean_ndvi (float): Mean NDVI value within the polygon.
+    """
+    minx, miny, maxx, maxy = polygon.bounds
+
+    minx, maxx = sorted([minx, maxx])
+    miny, maxy = sorted([miny, maxy])
+
+    if maxx < bounds.left or minx > bounds.right or maxy < bounds.bottom or miny > bounds.top:
+        print(f"Polygon bounds {minx, miny, maxx, maxy} are out of raster bounds.")
+        return 0, 0, 0
+
+    min_col, min_row = geo_to_raster(transform, minx, miny)
+    max_col, max_row = geo_to_raster(transform, maxx, maxy)
+
+    min_row, max_row = sorted([min_row, max_row])
+    min_col, max_col = sorted([min_col, max_col])
+
+    min_row, min_col = max(0, min_row), max(0, min_col)
+    max_row, max_col = min(height - 1, max_row), min(width - 1, max_col)
+
+    subset = ndvi_data[min_row:max_row + 1, min_col:max_col + 1]
+    ndvi_values = []
+
+    for r in range(subset.shape[0]):
+        for c in range(subset.shape[1]):
+            x, y = raster_to_geo(transform, r + min_row, c + min_col)
+            if polygon.contains(Point(x, y)):
+                ndvi_value = ndvi_data[r + min_row, c + min_col]
+                ndvi_values.append(ndvi_value)
+
+    if len(ndvi_values) == 0:
+        print(f"No NDVI values found within the polygon. Something went wrong.")
+
+    return np.min(ndvi_values), np.max(ndvi_values), np.mean(ndvi_values)
+
 def calculate_iou(batch_boxes1, batch_boxes2):
     # Ensure batch_boxes1 and batch_boxes2 are 2D arrays with shape [N, 4]
     batch_boxes1 = cp.array(batch_boxes1).reshape(-1, 4)
@@ -507,58 +559,9 @@ def is_surrounded(contained_ids, polygon_id):
     count = contained_ids.count(str(polygon_id))
     return int(count)
 
-def get_ndvi_within_polygon(polygon: shapely.geometry.Polygon, ndvi_data: np.ndarray, transform: Affine, width: int, height: int, bounds: BoundingBox):
-    """
-    Find the minimum, maximum, and mean NDVI values within a polygon from raster NDVI data.
 
-    Args:
-        polygon (shapely.geometry.Polygon): Polygon defining the area of interest.
-        ndvi_data (numpy.ndarray): 2D array of NDVI data from the raster.
-        transform (Affine): Transformation matrix for geo to raster / raster to geo coordinates.
-        width (int): Width of the raster in pixels.
-        height (int): Height of the raster in pixels.
-        bounds (BoundingBox): Bounds of the raster.
 
-    Returns:
-        tuple: (min_ndvi, max_ndvi, mean_ndvi)
-            - min_ndvi (float): Minimum NDVI value within the polygon.
-            - max_ndvi (float): Maximum NDVI value within the polygon.
-            - mean_ndvi (float): Mean NDVI value within the polygon.
-    """
-    minx, miny, maxx, maxy = polygon.bounds
-
-    minx, maxx = sorted([minx, maxx])
-    miny, maxy = sorted([miny, maxy])
-
-    if maxx < bounds.left or minx > bounds.right or maxy < bounds.bottom or miny > bounds.top:
-        print(f"Polygon bounds {minx, miny, maxx, maxy} are out of raster bounds.")
-        return 0, 0, 0
-
-    min_col, min_row = geo_to_raster(transform, minx, miny)
-    max_col, max_row = geo_to_raster(transform, maxx, maxy)
-
-    min_row, max_row = sorted([min_row, max_row])
-    min_col, max_col = sorted([min_col, max_col])
-
-    min_row, min_col = max(0, min_row), max(0, min_col)
-    max_row, max_col = min(height - 1, max_row), min(width - 1, max_col)
-
-    subset = ndvi_data[min_row:max_row + 1, min_col:max_col + 1]
-    ndvi_values = []
-
-    for r in range(subset.shape[0]):
-        for c in range(subset.shape[1]):
-            x, y = raster_to_geo(transform, r + min_row, c + min_col)
-            if polygon.contains(Point(x, y)):
-                ndvi_value = ndvi_data[r + min_row, c + min_col]
-                ndvi_values.append(ndvi_value)
-
-    if len(ndvi_values) == 0:
-        print(f"No NDVI values found within the polygon. Something went wrong.")
-
-    return np.min(ndvi_values), np.max(ndvi_values), np.mean(ndvi_values)
-
-def process_features(features, polygon_dict, id_to_area, containment_threshold, height_data, transform, width, height, bounds):
+def process_features(features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, width, height, height_bounds, ndvi_bounds):
     polygon_x_all = []
     polygon_y_all = []
     ids_all = []
@@ -602,7 +605,7 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     centroids = get_centroids(polygon_x_gpu, polygon_y_gpu)
 
     # Perform height data lookups for all polygons at once on the GPU
-    heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, transform, width, height, bounds)
+    heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, width, height, height_bounds)
 
     # Convert CuPy arrays to NumPy arrays for serialization
     heights = heights.get()  # Convert to NumPy array
@@ -623,6 +626,8 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         except Exception as e:
             print(f"Error rounding coordinates for polygon {polygon_id}: {e}")
 
+        # Get NDVI values within the polygon
+        polygon = shape(feature['geometry'])
         min_ndvi, max_ndvi, mean_ndvi = get_ndvi_within_polygon(polygon,
                                                                 ndvi_data,
                                                                 ndvi_transform,
@@ -637,9 +642,9 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
             'poly_id': polygon_id,
             'Area': area,
             'TreeHeight': height,
-            'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])}  # Ensure JSON compatibility
-            'MeanNDVI': mean_ndvi
-            'MaxNDVI': max_ndvi
+            'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])},  # Ensure JSON compatibility
+            'MeanNDVI': mean_ndvi,
+            'MaxNDVI': max_ndvi,
             'MinNDVI': min_ndvi
         })
 
@@ -790,7 +795,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
         ndvi_transform = src.transform
         ndvi_bounds = src.bounds
 
-    filtered_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, ndvi_data, ndvi_transform, ndvi_bounds, height_data, height_transform, height_width_tif, height_height_tif, height_bounds)
+    filtered_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, height_width_tif, height_height_tif, height_bounds, ndvi_bounds)
     '''
     contained_ids_per_feature_flat = [item for sublist in contained_ids_per_feature.values() for item in sublist]
     updated_features = update_feature_visualization(
