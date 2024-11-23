@@ -10,7 +10,7 @@ from shapely.geometry import box
 from rasterio.mask import mask
 import shutil
 
-from TreeDetection.helpers import delete_contents
+from helpers import delete_contents
 """
 Tiling orthomosaic data.
 
@@ -38,7 +38,6 @@ def tile_single_file(
     with rasterio.open(data_path) as data:
         out_path = Path(out_dir)
         os.makedirs(out_path, exist_ok=True)
-        crs = rasterio.CRS.from_string(data.crs.wkt)
         crs = data.crs.to_epsg()
         
         tilename = Path(data.name).stem
@@ -90,35 +89,19 @@ def tile_single_file(
                     out_meta.update({"dtype": "uint8"})
 
                 # Write the output TIFF file
-                out_tif = out_path_root.with_suffix(".tif")
+                meta_name = out_path_root.with_suffix(".json")
                 if not os.path.exists(out_path_root.parent):
                     os.makedirs(out_path_root.parent)
 
-                try:
-                    with rasterio.open(out_tif, "w", **out_meta) as dest:
-                        dest.write(out_img)
-                except Exception as e:
-                    logger.error(f"Failed to write {out_tif}: {e}")
+                metadata = {"crs": crs, "transform": out_transform}
+                with open(meta_name, "w") as meta_file:
+                    json.dump(metadata, meta_file)
 
+                # Use the in-memory `out_img` array directly to create the RGB for PNG output
+                rgb = np.dstack((out_img[2], out_img[1], out_img[0]))  # BGR for cv2
+                rgb_rescaled = 255 * rgb / 65535 if np.max(out_img[1]) > 255 else rgb
+                cv2.imwrite(str(out_path_root.with_suffix(".png").resolve()), rgb_rescaled)
 
-                # Read the saved TIFF file and convert to RGB for PNG output
-                arr = rasterio.open(out_tif).read()
-
-                # Get RGB information
-                rgb = np.dstack((arr[2], arr[1], arr[0]))  # BGR for cv2
-                rgb_rescaled = 255 * rgb / 65535 if np.max(arr[1]) > 255 else rgb
-
-                # Export RGB information to its own file
-                out_path_root_png = Path(str(out_path_root) + ".png")
-                cv2.imwrite(str(out_path_root_png), rgb_rescaled)
-
-                # Get infrared information
-                infrared = arr[3]
-                infrared_rescaled = 255 * rgb / 65535 if np.max(arr[3]) > 255 else infrared
-
-                # Export infrared information to its own file
-                infrared_out_path_root = Path(str(out_path_root) + "_infrared.png")
-                cv2.imwrite(str(infrared_out_path_root), infrared_rescaled)
 
 def tile_data(
     file_list: list,
@@ -127,7 +110,9 @@ def tile_data(
     tile_width: int = 200,
     tile_height: int = 200,
     dtype_bool: bool = False,
-    max_workers: int = 4, logger=None
+    parallel: bool = False,
+    max_workers: int = 4, 
+    logger=None
 ) -> None:
     """
     Tiling multiple raster files and saving output tiles. 
@@ -141,6 +126,7 @@ def tile_data(
         tile_width (int): Width of each tile.
         tile_height (int): Height of each tile.
         dtype_bool (bool): Convert the output to boolean.
+        parallel (bool): whether to use several processes or just one
         max_workers (int): Number of parallel workers to use.
         logger (Logger): Logger object for logging messages
 
@@ -155,47 +141,50 @@ def tile_data(
     if not os.path.isdir(out_dir):
         raise NotADirectoryError(f"Output directory is not a directory: {out_dir}")
     
-    #delete_contents(out_dir, logger=logger)
-
-
-    for data_path in file_list:   
-        img_out_dir = os.path.join(out_dir, Path(data_path).stem)
-        tile_single_file(
-                    data_path,
-                    img_out_dir,
-                    buffer,
-                    tile_width,
-                    tile_height,
-                    dtype_bool,
-                    logger
-                )
-    """
-    # Tiles multiple raster files in parallel and saves the output tiles.
-    with ProcessPoolExecutor(max_workers=1) as executor:
-        for data_path in file_list:            
-            img_out_dir = os.path.join(out_dir, Path(data_path).stem)
-            futures = [
-                executor.submit(
-                    tile_single_file,
-                    data_path,
-                    img_out_dir,
-                    buffer,
-                    tile_width,
-                    tile_height,
-                    dtype_bool,
-                    logger
-                )
-                
-            ]
-        for future in futures:
+    if not parallel:
+        for data_path in file_list:   
+            img_out_dir = os.path.join(out_dir, Path(data_path).stem)            
             try:
-                future.result()  # Ensure any exceptions are raised
+                tile_single_file(
+                            data_path,
+                            img_out_dir,
+                            buffer,
+                            tile_width,
+                            tile_height,
+                            dtype_bool,
+                            logger
+                        )      
             except Exception as e:
                 if logger:
                     logger.error(f"Error processing file: {e}")
                 else:
-                    print(f"Error processing file: {e}")
-        """
+                    print(f"Error processing file: {e}")   
+    else:
+        # Tiles multiple raster files in parallel and saves the output tiles.
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for data_path in file_list:            
+                img_out_dir = os.path.join(out_dir, Path(data_path).stem)
+                futures = [
+                    executor.submit(
+                        tile_single_file,
+                        data_path,
+                        img_out_dir,
+                        buffer,
+                        tile_width,
+                        tile_height,
+                        dtype_bool,
+                        logger
+                    )
+                    
+                ]
+            for future in futures:
+                try:
+                    future.result()  # Ensure any exceptions are raised
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error processing file: {e}")
+                    else:
+                        print(f"Error processing file: {e}")
 if __name__ == "__main__":
     # Example usage
     file_list = ["file1.tif", "file2.tif", "file3.tif"]

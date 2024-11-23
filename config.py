@@ -30,7 +30,8 @@ def setup_model_cfg(base_model="COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x
     # Inference settings
     cfg.MODEL.DEVICE = device  # Set device to CPU or GPU
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # Only one class (trees)
-    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5  # Set threshold for predictions    
+    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.3  # Set threshold for predictions    
+    cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.5
     return cfg
 
 def load_config(config_path: str):
@@ -141,6 +142,6 @@ def get_config(config_path: str):
     config["debug"] = config.get("debug", False)
     config["logger"] = setup_logging(os.path.join(config["output_directory"], "logs"), config["debug"])
     config["keep_intermediate"] = config.get("keep_intermediate", False)
-
+    config["simplify_tolerance"] = config.get("simplify_tolerance", 0.2)
 
     return config
