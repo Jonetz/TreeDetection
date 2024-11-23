@@ -527,10 +527,6 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
         ndvi_transform = src.transform
         ndvi_bounds = src.bounds
 
-    # if height_width_tif != nir_width_tif or height_height_tif != nir_height_tif or height_bounds != nir_bounds:
-    #     raise ValueError(f"Height and NIR data have different dimensions. Height Width: {height_width_tif}, Height Height: {height_height_tif}, NIR Height: {nir_height_tif}, NIR Width: {nir_width_tif}")
-    #     # TODO also check for transform?
-
     updated_features = []
     contained_ids_per_feature = {}
 
