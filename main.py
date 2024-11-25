@@ -1,22 +1,19 @@
+import asyncio
+from pathlib import Path
 import sys
 import os
 import re
 import warnings
-
-import torch
+from prediction import Predictor
 
 # Add the root project directory to the system path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import get_filenames, process_and_stitch_predictions, fuse_predictions, delete_contents, RoundedFloatEncoder, exclude_outlines
+from helpers import process_and_stitch_predictions, fuse_predictions, delete_contents
 from post_performant import process_files_in_directory
 
-from detectron2.engine import DefaultPredictor
-from detectron2.evaluation.coco_evaluation import instances_to_coco_json
-
 from concurrent.futures import ThreadPoolExecutor
-import json, cv2
 import geopandas as gpd
 import shutil
 from torch.amp import autocast
@@ -48,87 +45,57 @@ def postprocess_files(config):
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
         crowns.to_file(os.path.join(config["output_directory"], file.replace('processed_', '')))
 
-def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50):
+async def predict_on_model(config, model_path, tiles_path, output_path, batch_size=2):
     """
     Predict the tiles according to the configuration using mixed precision and parallel inference.
     
     Args:
-        cfg (CfgNode): Detectron Configuration node for the model.
+        config (dict): Detectron Configuration dictionary for the model.
         model_path (str): Path to the model.
         tiles_path (str): Path to the directory containing the tiles.
         output_path (str): Path to the output directory.
         batch_size (int): Number of images processed simultaneously.
-        max_workers (int): Maximum number of threads for parallel inference.
     """
     logger = config.get("logger", None)
 
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file not found: {model_path}")
-    if not os.path.exists(tiles_path):
-        raise FileNotFoundError(f"Tiles directory not found: {tiles_path}")
-    if not os.path.isdir(tiles_path):
-        raise NotADirectoryError(f"Tiles directory is not a directory: {tiles_path}")
+    # Check paths
+    for path, name in [(model_path, "Model file"), (tiles_path, "Tiles directory")]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"{name} not found: {path}")
+        if name == "Tiles directory" and not os.path.isdir(path):
+            raise NotADirectoryError(f"{name} is not a directory: {path}")
 
-    # Create the output directory if it doesn't exist
-    if not os.path.exists(output_path) or not os.path.isdir(output_path):
-        os.makedirs(output_path, exist_ok=True)
-    else:
-        delete_contents(output_path, logger=logger)
+    # Create output directory
+    os.makedirs(output_path, exist_ok=True)
 
-    # Initialize the config with updated model weights and device
+    # Initialize model configuration and predictor
     cfg = setup_model_cfg(update_model=model_path, device=config["device"])
+    predictor = Predictor(cfg, device_type=config["device"], max_batch_size=batch_size, output_dir=output_path)
 
-    # Initialize predictor
-    predictor = DefaultPredictor(cfg)
+    # Collect all TIF files
+    images_directory = Path(config["image_directory"])
+    images_paths = [str(f) for f in images_directory.glob("*.tif")]
 
-    # Load dataset (assuming get_filenames is a helper function to load image paths)
-    dataset_dicts = get_filenames(tiles_path)
+    if not images_paths:
+        logger.warning("No TIF files found for prediction.")
+        return
 
-    def process_image(d):
-        """Helper function to process each image."""
-        img = cv2.imread(d["file_name"])
+    # Parallel processing with asyncio
+    async def process_image(file_path):
+        tile_dir = os.path.join(tiles_path, os.path.basename(file_path).replace('.tif', ''))
+        os.makedirs(tile_dir, exist_ok=True)
 
-        # Use mixed precision inference
         try:
             with autocast(device_type=config["device"]):
-                outputs = predictor(img)
+                await predictor(file_path, tile_dir)
         except Exception as e:
-            logger.error(f"Error processing {d['file_name']}: {e}")
-            return f"Error processing: {d['file_name']}"
+            logger.error(f"Error processing {file_path}: {e}")
 
-        # Generate output file name
-        file_name_path = d["file_name"]
+    # Launch tasks
+    tasks = [process_image(fp) for fp in images_paths]
+    await asyncio.gather(*tasks)
 
-        # Extract the image name from the path
-        image_name = os.path.basename(os.path.dirname(file_name_path))  # Get the folder name as imagename
-        tile_name = os.path.basename(file_name_path).replace("png", "json")  # Replace .png with .json
-
-        # Create corresponding subdirectory in output_path for predictions
-        pred_subdir = os.path.join(output_path, image_name)  # Set output path to include imagename
-        os.makedirs(pred_subdir, exist_ok=True)  # Ensure subdirectory exists
-
-        output_file = os.path.join(pred_subdir, f"Prediction_{tile_name}")  # Full path for the output file
-
-        # Save predictions as COCO JSON format
-        evaluations = instances_to_coco_json(outputs["instances"].to("cpu"), d["file_name"])
-        with open(output_file, "w") as dest:
-            json.dump(evaluations, dest, cls=RoundedFloatEncoder, separators=(',', ':'))
-        return f"Processed: {file_name_path}"
-
-    # Use ThreadPoolExecutor for parallel inference
-    total_files = len(dataset_dicts)
-    max_workers = config.get("num_workers", 1)
-    logger.info(f"Predicting {total_files} images  from {tiles_path} using {max_workers} workers")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_image, d) for d in dataset_dicts]
-        # Optionally: print progress as batches are processed
-        for i, future in enumerate(futures, start=1):
-            if i % batch_size == 0 and config.get("verbose", False) and logger:
-                logger.debug(f"File {i}/{total_files}: {future.result()}")
-
-    if config.get("verbose", False) and logger:
-        logger.info(f"Processed {total_files}/{total_files} images")
-
+    logger.info(f"Completed prediction for {len(images_paths)} images.")
 def predict_tiles(config):
     """
     Predict the tiles according to the configuration.
@@ -142,12 +109,12 @@ def predict_tiles(config):
 
         urban_fold = os.path.join(config["output_directory"], "urban_geojson")
         forrest_fold = os.path.join(config["output_directory"], "forrest_geojson")
-        # Predict the tiles using the urban model
-        predict_on_model(config, config["urban_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "urban_predictions"))
+        # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
+        asyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"],
+                         os.path.join(config["output_directory"], "urban_predictions")))
         # Predict the tiles using the forrest model
-        predict_on_model(config, config["forrest_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "forrest_predictions"))
+        asyncio.run(predict_on_model(config, config["forrest_model"], config["tiles_path"],
+                         os.path.join(config["output_directory"], "forrest_predictions")))
         # Process and stitch predictions for the urban model
         process_and_stitch_predictions(
             tiles_path=config["tiles_path"],
@@ -273,9 +240,9 @@ def process_files(config):
     predict_tiles(config)
 
     # Post-process the predictions
-    postprocess_files(config)
-
-    shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+    #postprocess_files(config)
+    if not config.get('keep_intermediate', False):
+        shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
     for folder in os.listdir(config["output_directory"]):
         folder = os.path.join(config["output_directory"], folder)
         keep_folders = ["processed_exclusions", "logs"]

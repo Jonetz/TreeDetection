@@ -756,7 +756,6 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         "type": "FeatureCollection",
         "features": features
     }
-    print(f"Processing {len(features)} features from {file_path}.")
     processed_data = process_geojson(data, confidence_threshold, containment_threshold, height_data_path)
 
     new_schema = schema.copy()
