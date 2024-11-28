@@ -32,7 +32,7 @@ def postprocess_files(config):
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
     
     # 1. Filter with exclude outlines
-    logger.info("Excluding Outlines.")
+    #logger.info("Excluding Outlines.")
     #exclude_outlines(config)
 
     # 2. Filter with post-processing rules 
@@ -267,15 +267,16 @@ def process_files(config):
     Process the files according to the configuration.
     """
     # Read the files and tile them
-    preprocess_files(config)
+    #preprocess_files(config)
 
     # Predict the tiles
-    predict_tiles(config)
+    #predict_tiles(config)
 
     # Post-process the predictions
     postprocess_files(config)
 
-    shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+    if not config.get('keep_intermediate', False):
+        shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
     for folder in os.listdir(config["output_directory"]):
         folder = os.path.join(config["output_directory"], folder)
         keep_folders = ["processed_exclusions", "logs"]
