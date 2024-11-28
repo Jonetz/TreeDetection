@@ -9,7 +9,8 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import get_filenames, process_and_stitch_predictions, fuse_predictions, delete_contents, RoundedFloatEncoder, exclude_outlines
+from helpers import get_filenames, process_and_stitch_predictions, fuse_predictions, delete_contents, \
+    RoundedFloatEncoder, exclude_outlines
 from post_performant import process_files_in_directory
 
 from detectron2.engine import DefaultPredictor
@@ -23,6 +24,7 @@ from torch.amp import autocast
 
 gpd.options.display_precision = 2
 
+
 def postprocess_files(config):
     """
     postprocess the files according to the configuration.
@@ -30,23 +32,24 @@ def postprocess_files(config):
     logger = config["logger"]
     logger.info("Postprocessing the predictions.")
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
-    
     # 1. Filter with exclude outlines
     logger.info("Excluding Outlines.")
-    #exclude_outlines(config)
+    # exclude_outlines(config)
 
-    # 2. Filter with post-processing rules 
-    process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'), config['height_data_path'],\
-                                confidence_threshold=config['confidence_threshold'], containment_threshold=config['containment_threshold'],\
-                                parallel=True, filename_pattern=filename_pattern)
-    
-    # 4. Save the final predictions as gpkg in another folder 
+    # 2. Filter with post-processing rules
+    process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
+                               config['height_data_path'], confidence_threshold=config['confidence_threshold'],
+                               containment_threshold=config['containment_threshold'], parallel=True,
+                               filename_pattern=filename_pattern)
+
+    # 4. Save the final predictions as gpkg in another folder
     for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
         if not (file.endswith('.geojson') or file.endswith('.gpkg')) or file.startswith('processed_'):
             continue
         crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
         crowns.to_file(os.path.join(config["output_directory"], file.replace('processed_', '')))
+
 
 def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50):
     """
@@ -129,6 +132,7 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=50)
     if config.get("verbose", False) and logger:
         logger.info(f"Processed {total_files}/{total_files} images")
 
+
 def predict_tiles(config):
     """
     Predict the tiles according to the configuration.
@@ -198,7 +202,7 @@ def preprocess_files(config):
     Preprocess the files according to the configuration.
     """
     # 1. Read from the dictionary   
-    images_directory = config["image_directory"] 
+    images_directory = config["image_directory"]
     height_data_directory = config["height_data_path"]
     if not os.path.exists(images_directory):
         raise FileNotFoundError(f"Image directory not found: {images_directory}")
@@ -211,7 +215,8 @@ def preprocess_files(config):
 
     # Collect all TIF files in the directory
     images_paths = [os.path.join(images_directory, f) for f in os.listdir(images_directory) if f.endswith('.tif')]
-    height_paths = [os.path.join(height_data_directory, f) for f in os.listdir(height_data_directory) if f.endswith('.tif')]
+    height_paths = [os.path.join(height_data_directory, f) for f in os.listdir(height_data_directory) if
+                    f.endswith('.tif')]
 
     # Remove files that have already been processed
     if os.path.exists(config["continue"]):
@@ -253,11 +258,13 @@ def preprocess_files(config):
             missing_height_data.append(image_path)
 
     if not images_paths:
-        raise FileNotFoundError(f"No image TIF-files matching the pattern found in the directory: {images_directory} or all files have already been processed.")
+        raise FileNotFoundError(
+            f"No image TIF-files matching the pattern found in the directory: {images_directory} or all files have already been processed.")
 
     # Continue with tiling if there are valid images
     if images_paths:
-        tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"], max_workers=config["num_workers"], logger=config["logger"])
+        tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"],
+                  max_workers=config["num_workers"], logger=config["logger"])
 
     return images_paths
 
@@ -275,17 +282,18 @@ def process_files(config):
     # Post-process the predictions
     postprocess_files(config)
 
-    shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+    shutil.rmtree(config["tiles_path"], ignore_errors=True)  # Remove the tiles directory
     for folder in os.listdir(config["output_directory"]):
         folder = os.path.join(config["output_directory"], folder)
         keep_folders = ["processed_exclusions", "logs"]
-        if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get('keep_intermediate', False):
-            shutil.rmtree(folder)
+        if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get(
+                'keep_intermediate', False):
+           shutil.rmtree(folder)
 
     # Print stats about the processing
 
 
-def profile_code(config, threshold = 0.05):
+def profile_code(config, threshold=0.05):
     """
     Profile the code to analyze performance using cProfile.
     """

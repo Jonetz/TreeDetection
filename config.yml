@@ -8,8 +8,8 @@ forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # optional if combined
 output_directory: "output"  # default: ./output
 tiles_path: "tiles"  # default: ./tiles
 # continue_path: "/home/jonas/tree_detection/tree_detection/output/continue.yml"  # default: ./output/continue.yml
-image_regex: r"FDOP\d{2}_(\d+)_rgbi\.tif"  # default: ".*_fdop.tif" # TODO Implement 
-height_data_regex: r"(\d+)\.tif"  # default: ".*_nDSM.tif"# TODO Implement 
+image_regex: "FDOP20-(\\d+).tif" # default: ".*_fdop.tif" # TODO Implement
+height_data_regex: "nDOM-(\\d+).tif"  # default: ".*_nDSM.tif"# TODO Implement
 
 # Tile parameters
 tile_width: 50  # default: 50
