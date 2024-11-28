@@ -1,21 +1,16 @@
-import json
 import os
-from typing import Tuple
-import rasterio
-import fiona
-import numpy as np
 import re
 import warnings
 
-from shapely import MultiPolygon
-from shapely.geometry import shape, Point, Polygon
-from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
-from rtree import index
+import json
+import rasterio
+from fiona.model import to_dict
+import fiona
 
-import cProfile
-import pstats
-import io
+from shapely import MultiPolygon
+from shapely.geometry import shape, Polygon
+
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import cupy as cp
@@ -44,20 +39,6 @@ def is_gpu_available():
     except cp.cuda.runtime.CUDARuntimeError:
         return False
 
-# Decorator to automatically select whether to use GPU or CPU based on availability
-def run_on_device(func):
-    def wrapper(*args, **kwargs):
-        # Check if GPU is available
-        if is_gpu_available():
-            # Transfer data to GPU
-            args = tuple(cp.array(arg) if isinstance(arg, np.ndarray) else arg for arg in args)
-            return func(*args, **kwargs)
-        else:
-            # Fall back to CPU using NumPy
-            args = tuple(np.array(arg) if isinstance(arg, cp.ndarray) else arg for arg in args)
-            return func(*args, **kwargs)
-    return wrapper
-
 def raster_to_geo(transform, row, col):
     """Convert raster indices to geographical coordinates."""
     # Extract elements from the 3x3 affine matrix
@@ -78,34 +59,6 @@ def geo_to_raster(transform, x, y):
     col = (x - c) / a
     row = (y - f) / e    
     return int(row), int(col)
-
-def is_point_in_polygon(polygon_x, polygon_y, px, py):
-    """
-    Use the ray-casting algorithm to determine if a point (px, py) is inside a polygon.
-    
-    Arguments:
-    - polygon_x: List of x-coordinates of the polygon's vertices
-    - polygon_y: List of y-coordinates of the polygon's vertices
-    - px, py: The point to check
-    
-    Returns:
-    - True if the point is inside the polygon, otherwise False.
-    """
-    num_vertices = len(polygon_x)
-    inside = False
-    xinters = 0.0
-    p1x, p1y = polygon_x[0], polygon_y[0]
-    for i in range(num_vertices + 1):
-        p2x, p2y = polygon_x[i % num_vertices], polygon_y[i % num_vertices]
-        if py > min(p1y, p2y):
-            if py <= max(p1y, p2y):
-                if px <= max(p1x, p2x):
-                    if p1y != p2y:
-                        xinters = (py - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                    if p1x == p2x or px <= xinters:
-                        inside = not inside
-        p1x, p1y = p2x, p2y
-    return inside
 
 def euclidean_distance(x1, y1, x2, y2):
     return np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
@@ -325,6 +278,18 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
 
     return retained_ids
 
+def calculate_area(polygon):
+    """
+    Calculate the area of a polygon.
+
+    Args:
+        polygon (shapely.geometry.Polygon): Polygon object.
+
+    Returns:
+        float: Area of the polygon.
+    """
+    return polygon.area
+
 def get_centroids(polygon_x_gpu, polygon_y_gpu):
     """
     Compute the centroids for all polygons in the batch.
@@ -341,44 +306,6 @@ def get_centroids(polygon_x_gpu, polygon_y_gpu):
     centroid_y = cp.mean(polygon_y_gpu, axis=1)
     
     return cp.stack((centroid_x, centroid_y), axis=1)
-
-def get_centroid(polygon):
-    """
-    Calculate the centroid of a polygon.
-
-    Args:
-        polygon (shapely.geometry.Polygon): Polygon object.
-
-    Returns:
-        tuple: (x, y) Coordinates of the centroid.
-    """
-    centroid = polygon.centroid
-    return (centroid.x, centroid.y)
-
-def get_raster_metadata(raster_file):
-    """
-    Extract metadata and data from a raster file.
-
-    Args:
-        raster_file (str): Path to the raster file.
-
-    Returns:
-        tuple: (transform, crs, width, height, dtype, data)
-            - transform (Affine): Transformation matrix of the raster.
-            - crs (CRS): Coordinate Reference System of the raster.
-            - width (int): Width of the raster in pixels.
-            - height (int): Height of the raster in pixels.
-            - dtype (numpy.dtype): Data type of the raster values.
-            - data (numpy.ndarray): 2D array of raster values.
-    """
-    with rasterio.open(raster_file) as src:
-        transform = src.transform
-        crs = src.crs
-        width = src.width
-        height = src.height
-        dtype = src.dtypes[0]
-        data = src.read(1)
-    return transform, crs, width, height, dtype, data
 
 def round_coordinates(polygon, decimals=3):
     """
@@ -397,103 +324,73 @@ def round_coordinates(polygon, decimals=3):
     except:        
         return [[[coord for coord in point] for point in ring] for ring in polygon]
 
-def calculate_area(polygon):
+def process_containment_features(features, polygon_ids, polygon_bounds, containment_threshold=0.6):
     """
-    Calculate the area of a polygon.
+    Efficiently process features to calculate polygon containment using GPU, excluding self-containment.
 
     Args:
-        polygon (shapely.geometry.Polygon): Polygon object.
+        features (list): List of features with GeoJSON-like format.
+        containment_threshold (float): Percentage of bounding box overlap to determine containment.
 
     Returns:
-        float: Area of the polygon.
-    """
-    return polygon.area
+        list: Updated features with 'is_contained' and 'num_contained' properties added.
+    """    
+    # Convert bounding boxes to CuPy arrays
+    bounds_gpu = cp.array(polygon_bounds, dtype=cp.float32)  # Shape: (num_polygons, 4)
 
-def create_spatial_index(polygon_dict):
-    """
-    Create an Rtree spatial index for the polygons.
+    # Step 2: Compute overlap for all pairs of polygons
+    num_polygons = bounds_gpu.shape[0]
+    min_x_outer = bounds_gpu[:, 0][:, None]
+    min_y_outer = bounds_gpu[:, 1][:, None]
+    max_x_outer = bounds_gpu[:, 2][:, None]
+    max_y_outer = bounds_gpu[:, 3][:, None]
+    
+    min_x_inner = bounds_gpu[:, 0]
+    min_y_inner = bounds_gpu[:, 1]
+    max_x_inner = bounds_gpu[:, 2]
+    max_y_inner = bounds_gpu[:, 3]
+    
+    # Calculate intersection dimensions
+    inter_min_x = cp.maximum(min_x_outer, min_x_inner[None, :])
+    inter_min_y = cp.maximum(min_y_outer, min_y_inner[None, :])
+    inter_max_x = cp.minimum(max_x_outer, max_x_inner[None, :])
+    inter_max_y = cp.minimum(max_y_outer, max_y_inner[None, :])
 
-    Args:
-        polygon_dict (dict): Dictionary with polygon IDs as keys and shapely.geometry.Polygon objects as values.
+    # Compute intersection areas
+    inter_width = cp.maximum(0, inter_max_x - inter_min_x)
+    inter_height = cp.maximum(0, inter_max_y - inter_min_y)
+    intersection_area = inter_width * inter_height
 
-    Returns:
-        index.Index: Rtree spatial index of the polygons.
-    """
-    idx = index.Index()
-    for poly_id, poly in polygon_dict.items():
-        bbox = poly.bounds
-        idx.insert(id=int(poly_id), coordinates=(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])))
-    return idx
+    # Compute areas of the inner polygons
+    inner_areas = (max_x_inner - min_x_inner) * (max_y_inner - min_y_inner)
 
-def is_contained(polygon, polygon_dict, id_to_area, polygon_id, threshold=0.9, spatial_idx=None):
-    """
-    Determine which polygons are contained within the given polygon based on area threshold.
+    # Calculate containment ratio
+    containment_ratios = intersection_area / inner_areas[None, :]  # Shape: (num_polygons, num_polygons)
 
-    Args:
-        polygon (shapely.geometry.Polygon): Polygon to check for containment.
-        polygon_dict (dict): Dictionary of polygons with their IDs.
-        id_to_area (dict): Dictionary mapping polygon IDs to their areas.
-        polygon_id (str): ID of the polygon to check.
-        threshold (float): Area threshold for containment (default is 0.9).
-        spatial_idx (index.Index, optional): Rtree spatial index for spatial queries.
+    # Step 3: Determine containment based on the threshold
+    is_contained = containment_ratios >= containment_threshold
 
-    Returns:
-        list: List of IDs of polygons that are contained within the given polygon.
-    """
-    contained_ids = []
-    polygon_area = id_to_area.get(polygon_id, None)
-    if polygon_area is None:
-        return contained_ids
+    # Exclude self-containment (set diagonal to False)
+    is_contained[cp.arange(num_polygons), cp.arange(num_polygons)] = False
 
-    polygon_bbox = polygon.bounds
+    num_contained = cp.sum(is_contained, axis=1).get()  # Convert to NumPy array for serialization
 
-    if spatial_idx:
-        possible_matches = list(spatial_idx.intersection(polygon_bbox))
-    else:
-        possible_matches = polygon_dict.keys()
+    # Step 4: Update features with containment information
+    updated_features = []
+    for i, feature in enumerate(features):
+        if polygon_ids[i] not in polygon_ids:
+            continue  # Skip invalid features
+        new_properties = dict(feature['properties'])
+        new_properties['is_contained'] = bool(cp.any(is_contained[:, i]).get())  # Is this polygon contained?
+        new_properties['num_contained'] = int(num_contained[i])  # How many polygons contain this one?
 
-    for other_id in possible_matches:
-        if str(other_id) != str(polygon_id):
-            other = polygon_dict.get(str(other_id))
-            if other is None:
-                continue
+        updated_features.append({
+            'type': 'Feature',
+            'properties': new_properties,
+            'geometry': feature['geometry']
+        })
 
-            other_area = id_to_area.get(str(other_id))
-            if other_area is None:
-                continue
-
-            other_bbox = other.bounds
-            if (polygon_bbox[0] > other_bbox[2] or
-                polygon_bbox[2] < other_bbox[0] or
-                polygon_bbox[1] > other_bbox[3] or
-                polygon_bbox[3] < other_bbox[1]):
-                continue
-
-            intersection_area = polygon.intersection(other).area
-            if intersection_area / other_area > threshold:
-                contained_ids.append(str(other_id))
-
-    return contained_ids
-
-def is_surrounded(contained_ids, polygon_id):
-    """
-    Count how many of the contained polygons surround the given polygon.
-
-    Args:
-        contained_ids (list): List of IDs of polygons contained within the given polygon.
-        polygon_id (str): ID of the polygon to check.
-
-    Returns:
-        int: Count of polygons that surround the given polygon.
-    """
-    count = 0
-    surrounding_ids = []
-    if not contained_ids:
-        return count, surrounding_ids
-    if contained_ids is None or None in contained_ids:
-        return count, surrounding_ids
-    count = contained_ids.count(str(polygon_id))
-    return int(count)
+    return updated_features
 
 def process_features(features, polygon_dict, id_to_area, containment_threshold, height_data, transform, width, height, bounds):
     polygon_x_all = []
@@ -502,12 +399,13 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     
     # Collect all polygons' coordinates and IDs for batch processing
     max_points = 0  # Track the maximum number of points in any polygon
+    polygon_bounds = []
     for feature in features:
         polygon = shape(feature['geometry'])
 
         # If the polygon is a MultiPolygon, merge it into a single Polygon
         if isinstance(polygon, MultiPolygon):
-            polygon =list(polygon.geoms)[0]
+            polygon = list(polygon.geoms)[0]
         if isinstance(polygon, Polygon):
             # Handle single Polygon
             polygon_x, polygon_y = polygon.exterior.xy
@@ -515,19 +413,36 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
             polygon_y_all.append(polygon_y)
         else:
             print(f'Other type than polygon encountered: {type(polygon)}')
+        polygon_bounds.append(polygon.bounds)
         ids_all.append(feature['properties']['poly_id'])
         max_points = max(max_points, len(polygon_x))  # Update max_points
 
-    def pad_polygon_coords(polygon_coords, max_length):
-        # Ensure that polygon_coords is a CuPy array
-        polygon_coords = cp.asarray(polygon_coords)
-        
-        # Pad with NaN to match the required length
-        return cp.concatenate([polygon_coords, cp.full((max_length - len(polygon_coords),), cp.nan)])
+        def pad_polygon_coords(polygon_coords_all, max_length):
+            """
+            Pads a batch of polygons with NaN values to ensure all have the same length.
+            
+            Args:
+                polygon_coords_all (list of cupy.ndarray): List of 1D arrays of polygon coordinates.
+                max_length (int): The maximum length to which each polygon is padded.
+                
+            Returns:
+                cupy.ndarray: 2D array where each row represents a padded polygon.
+            """
+            # Calculate the batch size
+            batch_size = len(polygon_coords_all)
+            
+            # Create an empty array filled with NaN of shape (batch_size, max_length)
+            padded_array = cp.full((batch_size, max_length), cp.nan)
+            
+            # Fill the padded array with the polygon coordinates
+            for i, coords in enumerate(polygon_coords_all):
+                padded_array[i, :len(coords)] = cp.array(coords)
+            
+            return padded_array
 
     # Now use this function to pad the coordinates
-    polygon_x_all_padded = [pad_polygon_coords(polygon_x, max_points) for polygon_x in polygon_x_all]
-    polygon_y_all_padded = [pad_polygon_coords(polygon_y, max_points) for polygon_y in polygon_y_all]
+    polygon_x_all_padded = pad_polygon_coords(polygon_x_all, max_points)
+    polygon_y_all_padded = pad_polygon_coords(polygon_y_all, max_points)
 
     # Convert the padded lists into CuPy arrays
     polygon_x_gpu = cp.array(polygon_x_all_padded, dtype=cp.float32)  # Shape: (num_polygons, max_points)
@@ -540,14 +455,57 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     
     # Perform height data lookups for all polygons at once on the GPU
     heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, transform, width, height, bounds)
+
+    # Call process_containment_features and retrieve attributes
+    polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
+    containment_results = process_containment_features(features, ids_all, polygon_bounds, containment_threshold)
+
+    # Extract containment results
+    containment_info = {feature['properties']['poly_id']: {'is_contained': feature['properties']['is_contained'], 
+                                                           'num_contained': feature['properties']['num_contained']} 
+                        for feature in containment_results}
+
+    # Step to further select the polygons based on containment results
+    selected_features = []
     
+    for feature in features:
+        polygon_id = feature['properties']['poly_id']
+        containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
+        
+        if containment_data['num_contained'] >= 3:
+            # Case 1: Contains at least three other polygons, discard it
+            continue
+        elif containment_data['num_contained'] == 2:
+            # Case 2: Contains two other polygons
+            contained_polygons = [f for f in features if polygon_id != f['properties']['poly_id'] and containment_info[f['properties']['poly_id']]['is_contained']]
+            if len(contained_polygons) == 2:
+                # Case 2a: Check mutual containment
+                if polygon_id in [f['properties']['poly_id'] for f in contained_polygons]:
+                    # Remove one of the polygons
+                    continue
+        elif containment_data['num_contained'] == 1:
+            # Case 3: Contains one other polygon, apply sorting strategies
+            other_polygon_id = [f['properties']['poly_id'] for f in features if containment_info[f['properties']['poly_id']]['is_contained']][0]
+            other_polygon = next(f for f in features if f['properties']['poly_id'] == other_polygon_id)
+            
+            # Sorting logic:
+            # TODO Refine sorting logic 
+            if heights[features.index(feature)] > heights[features.index(other_polygon)] :
+                selected_features.append(feature)
+            else:
+                # Handle cases where NDVI or area is preferred
+                pass
+        else:
+            # Case 4: Does not contain anything, no problem, we keep it
+            selected_features.append(feature)
+
     # Convert CuPy arrays to NumPy arrays for serialization
     heights = heights.get()  # Convert to NumPy array
     highest_points = highest_points.get()  # Convert to NumPy array
     
     updated_features = []
 
-    for i, feature in enumerate(features):
+    for i, feature in enumerate(selected_features):
         polygon_id = feature['properties']['poly_id']
         area = id_to_area.get(polygon_id, None)
 
@@ -560,13 +518,16 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         except Exception as e:
             print(f"Error rounding coordinates for polygon {polygon_id}: {e}")
 
-        # Create a new properties dictionary to avoid direct mutation
+         # Create a new properties dictionary to avoid direct mutation
+        containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
         new_properties = dict(feature['properties'])
         new_properties.update({
             'poly_id': polygon_id,
             'Area': area,
             'TreeHeight': height,
-            'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])}  # Ensure JSON compatibility
+            'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])},  # Ensure JSON compatibility
+            'is_contained': containment_data['is_contained'],
+            'num_contained': containment_data['num_contained']
         })
 
         new_feature = {
@@ -579,85 +540,15 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         }
 
         updated_features.append(new_feature)
-    print(f"Processed {len(updated_features)} features.")
     return updated_features
 
-# Helper function to calculate centroid on the GPU (if possible)
 def get_centroid_gpu(polygon_x_gpu, polygon_y_gpu):
     # Example: Calculate the centroid using CuPy (replace with your actual method)
     x_mean = cp.mean(polygon_x_gpu)
     y_mean = cp.mean(polygon_y_gpu)
     return cp.array([x_mean, y_mean])
 
-def update_feature_visualization(updated_features, contained_ids_per_feature, contained_ids_per_feature_flat, id_to_area, polygon_dict):
-    """
-    Update the visualization property of each feature based on containment and surrounding rules.
-
-    Args:
-        updated_features (list): List of GeoJSON features.
-        contained_ids_per_feature (dict): Dictionary mapping feature IDs to contained feature IDs.
-        contained_ids_per_feature_flat (list): Flattened list of contained feature IDs.
-        id_to_area (dict): Dictionary mapping feature IDs to their areas.
-        polygon_dict (dict): Dictionary of polygons with their IDs.
-
-    Returns:
-        list: Updated features with modified 'visualize' properties.
-    """    
-    #TODO Make this new using other features!
-    def is_contained(outer_polygon, inner_polygon, threshold=0.9):
-        """
-        Check if 90% or more of the inner_polygon is contained within the outer_polygon.
-        
-        Args:
-            outer_polygon (shapely.geometry.Polygon): The outer polygon.
-            inner_polygon (shapely.geometry.Polygon): The inner polygon.
-        
-        Returns:
-            bool: True if 90% or more of the inner_polygon is within the outer_polygon.
-        """
-        inner_area = inner_polygon.area
-        intersection_area = outer_polygon.intersection(inner_polygon).area
-        return (intersection_area / inner_area) >= threshold
-    for feature in updated_features:
-        feature_id = feature['properties']['poly_id']
-        feature['properties']['IsSurrounded'] = is_surrounded(contained_ids_per_feature_flat, feature_id)
-
-        if 'visualize' not in feature['properties']:
-            feature['properties']['visualize'] = 1
-
-        if feature['properties']['IsSurrounded'] > 2:
-            feature['properties']['visualize'] = 0
-            for surrounding_feature in updated_features:
-                if feature_id in contained_ids_per_feature[surrounding_feature['properties']['poly_id']]:
-                    feature['properties']['ContainedCount'] -= 1
-
-    for feature in updated_features:
-        feature_id = feature['properties']['poly_id']
-        if feature['properties']['visualize'] == 0:
-            continue
-
-        if feature['properties']['ContainedCount'] >= 4:
-            feature['properties']['visualize'] = 0
-        elif feature['properties']['ContainedCount'] > 0:
-            contained_ids = contained_ids_per_feature[feature_id]
-            outer_polygon = polygon_dict[str(feature_id)]
-
-            for id in contained_ids:
-                inner_polygon = polygon_dict[str(id)]
-                if id_to_area[str(id)] < id_to_area[str(feature_id)] and is_contained(outer_polygon, inner_polygon):
-                    for feature2 in updated_features:
-                        if feature2['properties']['poly_id'] == id:
-                            feature2['properties']['visualize'] = 1
-                            feature['properties']['visualize'] = 0
-                else:
-                    for feature2 in updated_features:
-                        if feature2['properties']['poly_id'] == id:
-                            feature2['properties']['visualize'] = 0
-                            feature['properties']['visualize'] = 1
-
-    return updated_features
-
-def process_geojson(data, confidence_threshold, containment_threshold, height_data_path):
+def process_geojson(data, confidence_threshold, containment_threshold, height_data_path, area_threshold=3):
     """
     Process a GeoJSON object to update features with additional properties based on containment and height data.
 
@@ -670,7 +561,8 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
     Returns:
         dict: Updated GeoJSON object with additional properties.
     """
-    features = data['features']#
+    features = data['features']
+
     # 1. Filter features based on confidence score
     filtered_features = [
         feature for feature in features 
@@ -678,6 +570,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
         float(feature['properties'].get('Confidence_score', 0)) >= confidence_threshold
     ]
 
+    # 2. Add polygon IDs and calculate polygon areas
     id_to_area = {}
     i = 0
     for feature in filtered_features:
@@ -696,11 +589,24 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
     if not polygon_dict:
         return {'type': 'FeatureCollection', 'features': []}
 
+    # 2.1 Filter out small polygons
+    new_features = [feature for feature in filtered_features if id_to_area[feature['properties']['poly_id']] >= area_threshold]
+    filtered_features = new_features
+
+    # Precompute the set of poly_ids from filtered_features
+    filtered_ids = {feature['properties']['poly_id'] for feature in filtered_features}
+
+    # Now filter polygon_dict based on the precomputed set of poly_ids
+    polygon_dict = {key: value for key, value in polygon_dict.items() if key in filtered_ids}
+
     # Prepare confidence scores for selection
     confidence_scores = {feature['properties']['poly_id']: feature['properties']['Confidence_score'] for feature in filtered_features}
-    iou_threshold = 0.9
+    
+    # TODO Make this config parameters
+    iou_threshold = 0.7
     area_threshold = 0.5
-    # Apply filtering to keep only selected polygons
+
+    # 3. Apply filtering to keep only selected polygons
     retained_ids = filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores, iou_threshold, area_threshold)
     filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
     # Continue with remaining processing steps
@@ -710,15 +616,9 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
         width_tif, height_tif = src.width, src.height
         bounds = src.bounds
 
-    filtered_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, height_data, transform, width_tif, height_tif, bounds)
-    '''
-    contained_ids_per_feature_flat = [item for sublist in contained_ids_per_feature.values() for item in sublist]
-    updated_features = update_feature_visualization(
-        updated_features, contained_ids_per_feature, contained_ids_per_feature_flat, id_to_area, polygon_dict
-    )
-    print(f"Updated {len(updated_features)} features with additional properties.")
-    '''
-    data['features'] = filtered_features
+    # 4. Filter polygons more complex based on containment and calculate height data for each polygon 
+    new_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, height_data, transform, width_tif, height_tif, bounds)
+    data['features'] = new_features
     return data
 
 def order_properties(feature, schema_properties):
@@ -748,15 +648,14 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         height_data_path (str): Path to the raster file containing height data.
     """
     with fiona.open(file_path, 'r') as source:
-        features = [feature for feature in source]
+        features = [to_dict(feature) for feature in source]
         schema = source.schema
-        crs = source.crs
+        crs = source.crs.to_string()
 
     data = {
         "type": "FeatureCollection",
         "features": features
     }
-    print(f"Processing {len(features)} features from {file_path}.")
     processed_data = process_geojson(data, confidence_threshold, containment_threshold, height_data_path)
 
     new_schema = schema.copy()
@@ -767,9 +666,8 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         'ContainedCount': 'int',
         'TreeHeight': 'float',
         'Centroid': 'str',
-        'ContainedIDs': 'str',
-        'IsSurrounded': 'int',
-        'visualize': 'int'
+        'is_contained': 'str',
+        'num_contained': 'int',
     }
     new_schema['properties'] = new_properties_schema
 
@@ -873,16 +771,19 @@ def profile_code():
     """
     Profile the code to analyze performance using cProfile.
     """
+    import cProfile
+    import pstats
+    import io
     pr = cProfile.Profile()
     
-    CONFIDENCE_THRESHOLD = 0.5
-    CONTAINMENT_THRESHOLD = 0.7
+    CONFIDENCE_THRESHOLD = 0.3
+    CONTAINMENT_THRESHOLD = 0.6
 
     geojson_directory = '/home/jonas/TreeDetection/output/geojson_predictions'
     height_directory = '/home/jonas/TreeDetection/data/nDSM_anno'
 
     pr.enable()
-    process_files_in_directory(geojson_directory, height_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=False, filename_pattern=("FDOP20_(\\d+)_(\\d+)_rgbi\\.tif","nDSM_(\\d+)_1km\\.tif"))
+    process_files_in_directory(geojson_directory, height_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=True, filename_pattern=("FDOP20_(\\d+)_(\\d+)_rgbi\\.tif","nDSM_(\\d+)_1km\\.tif"))
 
     pr.disable()
 

@@ -267,10 +267,10 @@ def process_files(config):
     Process the files according to the configuration.
     """
     # Read the files and tile them
-    #preprocess_files(config)
+    preprocess_files(config)
 
     # Predict the tiles
-    #predict_tiles(config)
+    predict_tiles(config)
 
     # Post-process the predictions
     postprocess_files(config)
