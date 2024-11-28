@@ -1,6 +1,7 @@
 import os
 import cv2
 import json
+from matplotlib import pyplot as plt
 import numpy as np
 import warnings
 import traceback
@@ -20,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from affine import Affine
 
 from shapely.geometry import box, shape
+import cupy as cp
 
 def exclude_outlines(config):
     for outline in config.get('exclude_files', []):
@@ -298,6 +300,33 @@ def box_filter(filename, shift: int = 0):
     bounding_box = box_make(minx, miny, width, buffer, crs, shift)
     return bounding_box
 
+def xy_gpu(raster_transform, y_coords, x_coords):
+    """
+    Transforms coordinates from raster space to the spatial reference system using the affine transformation matrix.
+    
+    Args:
+        raster_transform (Affine): The affine transformation matrix.
+        y_coords (np.ndarray): Array of y-coordinates.
+        x_coords (np.ndarray): Array of x-coordinates.
+
+    Returns:
+        tuple: Transformed x and y coordinates.
+    """
+    # Convert coordinates to cupy arrays for GPU processing
+    y_coords_gpu = cp.asarray(y_coords)
+    x_coords_gpu = cp.asarray(x_coords)
+
+    # Extract affine transformation parameters
+    a, b, c, d, e, f, g, h, i = raster_transform    
+
+    # Perform the affine transformation (x', y' = Ax + By + C, Dx + Ey + F)
+    # Using GPU with cupy for parallel processing
+    transformed_x = a * x_coords_gpu + b * y_coords_gpu + c
+    transformed_y = d * x_coords_gpu + e * y_coords_gpu + f
+
+    # Convert the results back to numpy arrays (if needed) or return as cupy arrays for further GPU processing
+    return cp.asnumpy(transformed_x), cp.asnumpy(transformed_y)
+
 def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simplify_tolerance=0.2):
     """
     Stitch together predicted crowns from multiple geojson files, applying a spatial filter.
@@ -450,7 +479,7 @@ def process_and_stitch_predictions(
                             continue
 
                         coords = np.array(polygon_coords).reshape(-1, 2)
-                        x_coords, y_coords = xy(raster_transform, coords[:, 1], coords[:, 0])
+                        x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
                         polygon = Polygon(zip(x_coords, y_coords))
 
                         features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
@@ -495,7 +524,6 @@ def process_and_stitch_predictions(
             if logger:
                 logger.error(f"Error processing folder {folder}: {e}")
             return None
-
     # Process folders in parallel
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         _ = list(executor.map(process_folder, image_folders))
