@@ -23,6 +23,7 @@ from affine import Affine
 from shapely.geometry import box, shape
 import cupy as cp
 
+
 def exclude_outlines(config):
     for outline in config.get('exclude_files', []):
         exclude_outline = gpd.read_file(outline)
@@ -48,6 +49,7 @@ def exclude_outlines(config):
             # Write the filtered crowns back to the original path, overwriting the original file
             crowns_filtered.to_file(file_path, driver='GPKG')
 
+
 class RoundedFloatEncoder(json.JSONEncoder):
     def __init__(self, *args, precision=2, **kwargs):
         self.precision = precision
@@ -61,7 +63,8 @@ class RoundedFloatEncoder(json.JSONEncoder):
         elif isinstance(obj, list):
             return "[" + ", ".join(self.encode(v) for v in obj) + "]"
         return super().encode(obj)
-    
+
+
 def polygon_from_mask(masked_arr):
     """Convert RLE data from the output instances into Polygons.
 
@@ -88,6 +91,7 @@ def polygon_from_mask(masked_arr):
     else:
         return 0
 
+
 def get_filenames(directory: str):
     """Get the file names if no geojson is present.
 
@@ -105,6 +109,7 @@ def get_filenames(directory: str):
                 dataset_dicts.append({"file_name": file_path})
 
     return dataset_dicts
+
 
 def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger=None, verbose=False):
     """
@@ -152,7 +157,7 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
         tif_file = Path(tif_file)
         base_name = tif_file.stem.replace("Prediction_", "").replace(".json", "")
         tif_lookup[base_name] = tif_file
-        
+
     def get_matching_tif_path(tile_image_name):
         """
         Finds the corresponding TIFF path for the given tile image name based on the start of the filename.
@@ -191,13 +196,14 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
             if os.path.isfile(output_geo_file):
                 logger.debug(f"file {tile_image_name} already processed for projecting to geojson/gpkg")
                 return
-            
+
             metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
             with open(metadata_path, "r") as meta_file:
                 metadata = json.load(meta_file)
                 epsg = metadata["crs"]
                 raster_transform = metadata["transform"]
-            raster_transform = Affine(*metadata["transform"]) if not isinstance(metadata["transform"], Affine) else metadata["transform"]
+            raster_transform = Affine(*metadata["transform"]) if not isinstance(metadata["transform"], Affine) else \
+                metadata["transform"]
 
             # Load the prediction JSON
             with open(filename, "r") as prediction_file:
@@ -228,7 +234,7 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
 
             # Save to GPKG with specified precision
             gdf.to_file(output_geo_file, driver="GPKG")
-            
+
             return f"Successfully processed: {filename.name}"
         except Exception as e:
             return f"Failed to process {filename.name}: {e}"
@@ -244,6 +250,7 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
     if logger and verbose:
         logger.debug("GeoJSON/GPKG projection complete.")
 
+
 def filename_geoinfo(filename):
     """Return geographic info of a tile from its filename.
 
@@ -258,6 +265,7 @@ def filename_geoinfo(filename):
     buffer = parts[3]
     crs = parts[4]
     return (minx, miny, width, buffer, crs)
+
 
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
     """Generate bounding box from geographic specifications.
@@ -283,6 +291,7 @@ def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0)
     )
     geo = gpd.GeoDataFrame({"geometry": bbox}, index=[0], crs=CRS.from_epsg(crs))
     return geo
+
 
 def box_filter(filename, shift: int = 0):
     """Create a bounding box from a file name to filter edge crowns.
@@ -371,11 +380,10 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
 
             # Perform spatial join to filter crowns within the box
             crowns_tile = gpd.sjoin(crowns_tile, geo, "inner", "within")
-            
+
             # Simplify geometries if tolerance is set
             if simplify_tolerance > 0:
                 crowns_tile['geometry'] = crowns_tile['geometry'].simplify(simplify_tolerance, preserve_topology=True)
-
 
             return crowns_tile
         except FileNotFoundError:
@@ -417,8 +425,9 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
 
     return crowns
 
+
 def process_and_stitch_predictions(
-    tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None, verbose=False
+        tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None, verbose=False
 ):
     """
     Combines projecting predictions to GeoJSON and stitching them into a single GPKG file.
@@ -454,6 +463,7 @@ def process_and_stitch_predictions(
             tif_lookup = {
                 Path(tif).stem.replace("Prediction_", ""): Path(tif) for tif in tiff_files
             }
+
             def process_and_filter(file):
                 try:
                     tile_image_name = file.name
@@ -485,7 +495,8 @@ def process_and_stitch_predictions(
                         features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
 
                     # Create GeoDataFrame
-                    gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
+                    gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features],
+                                           crs=f"EPSG:{epsg}")
 
                     # Simplify geometries
                     if simplify_tolerance > 0:
@@ -532,10 +543,12 @@ def process_and_stitch_predictions(
         logger.info(f"Stitched predictions saved to {output_path}")
     return output_path
 
+
 def calc_iou(shape1, shape2):
     """Calculate the IoU of two shapes."""
     iou = shape1.intersection(shape2).area / shape1.union(shape2).area
     return iou
+
 
 def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Round the coordinates of the geometries in the GeoDataFrame."""
@@ -556,6 +569,7 @@ def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     crowns['geometry'] = crowns['geometry'].apply(round_geometry)
 
     return crowns
+
 
 def clean_crowns(crowns: gpd.GeoDataFrame,
                  iou_threshold: float = 0.7,
@@ -659,6 +673,7 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
 
     return crowns_out.reset_index(drop=True)
 
+
 def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=None):
     """
     Fuse the predictions according to the configuration.
@@ -694,14 +709,14 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
         # Fix invalid geometries by calling make_valid
         forest_boundary["geometry"] = forest_boundary["geometry"].apply(
             lambda geom: geom.make_valid() if not geom.is_valid else geom
-        )        
+        )
         # Check if all geometries are valid after make_valid
         if not forest_boundary.is_valid.all():
             logger.warn(f"Some geometries are still invalid after the fix.")
-    
+
     # Optionally, remove empty geometries
     forest_boundary = forest_boundary[~forest_boundary.is_empty]
-    
+
     # Apply buffer(0) to fix remaining issues (e.g., self-intersections)
     forest_boundary["geometry"] = forest_boundary["geometry"].apply(
         lambda geom: geom.buffer(0) if not geom.is_valid else geom
@@ -779,10 +794,13 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                     forest_boundary = fused_shapes.make_valid()
                     fused_shapes['geometry'] = fused_shapes.buffer(0)  # Fix invalid geometries
                     if not all(fused_shapes.is_valid) and logger:
-                        logger.warning(f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")      
-                
-                # Save the fused result as a new GeoJSON file
+                        logger.warning(
+                            f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")
+
+                        # Save the fused result as a new GeoJSON file
                 fused_shapes.to_file(output_path, driver="GPKG")
+                logger.debug(f"File saved to {output_path}")
+
 
 def delete_contents(out_dir, logger=None):
     # Check for existing files and remove them synchronously
