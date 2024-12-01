@@ -252,8 +252,8 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
 
     return max_heights, max_coordinates
 
-# TODO: Port to GPU
-def get_ndvi_within_polygon(polygon, ndvi_data: np.ndarray, transform: Affine, width: int, height: int, bounds: BoundingBox):
+
+def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_data: np.ndarray, transform: np.ndarray, width: int, height: int, bounds: BoundingBox):
     """
     Find the minimum, maximum, and mean NDVI values within a polygon from raster NDVI data.
 
@@ -271,7 +271,7 @@ def get_ndvi_within_polygon(polygon, ndvi_data: np.ndarray, transform: Affine, w
             - max_ndvi (float): Maximum NDVI value within the polygon.
             - mean_ndvi (float): Mean NDVI value within the polygon.
     """
-    minx, miny, maxx, maxy = polygon.bounds
+    minx, miny, maxx, maxy = bounds
 
     minx, maxx = sorted([minx, maxx])
     miny, maxy = sorted([miny, maxy])
@@ -290,19 +290,61 @@ def get_ndvi_within_polygon(polygon, ndvi_data: np.ndarray, transform: Affine, w
     max_row, max_col = min(height - 1, max_row), min(width - 1, max_col)
 
     subset = ndvi_data[min_row:max_row + 1, min_col:max_col + 1]
-    ndvi_values = []
 
-    for r in range(subset.shape[0]):
-        for c in range(subset.shape[1]):
-            x, y = raster_to_geo(transform, r + min_row, c + min_col)
-            if polygon.contains(Point(x, y)):
-                ndvi_value = ndvi_data[r + min_row, c + min_col]
-                ndvi_values.append(ndvi_value)
+    # Prepare points (x, y) for batch processing
+    rows, cols = np.meshgrid(np.arange(subset.shape[0]), np.arange(subset.shape[1]), indexing='ij')
+    rows, cols = rows.flatten(), cols.flatten()
 
-    if len(ndvi_values) == 0:
-        print(f"No NDVI values found within the polygon. Something went wrong.")
+    # Convert to geo-coordinates for all points
+    x_coords, y_coords = raster_to_geo(transform, rows + min_row, cols + min_col)
 
-    return np.min(ndvi_values), np.max(ndvi_values), np.mean(ndvi_values)
+    # Convert x_coords and y_coords to CuPy arrays for GPU processing
+    x_coords_gpu, y_coords_gpu = cp.array(x_coords), cp.array(y_coords)
+
+    # Prepare arrays for results
+    num_polygons = polygon_x.shape[0]
+    min_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    max_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    mean_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+
+    centers = cp.zeros((num_polygons, 2), dtype=cp.float32)
+
+    for i in range(num_polygons):
+        # Get current polygon coordinates
+        polygon_x_i, polygon_y_i = polygon_x[i], polygon_y[i]
+
+        valid_mask = ~cp.isnan(polygon_x_i) & ~cp.isnan(polygon_y_i)  # Mask to remove NaNs
+        valid_x = polygon_x_i[valid_mask]
+        valid_y = polygon_y_i[valid_mask]
+
+        # Compute the center of the bounding box for the polygon (after filtering NaNs)
+        min_x, max_x = valid_x.min(), valid_x.max()
+        min_y, max_y = valid_y.min(), valid_y.max()
+
+        center_x = (min_x + max_x) / 2
+        center_y = (min_y + max_y) / 2
+        centers[i] = cp.array([center_x, center_y])
+
+        # Compute the radius of the bounding box for the polygon
+        radius = (max_x - min_x) + (max_y - min_y) / 4
+
+        # Check if points are inside the polygon using a vectorized function
+        inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
+
+        # Extract heights and coordinates where points are inside the polygon
+        inside_ndvi = subset.flatten()[inside_mask]
+
+        mean_ndvi = cp.mean(inside_ndvi)
+
+        # Handle empty result (fallback to centroid)
+        min_index = cp.argmin(inside_ndvi)
+        max_index = cp.argmax(inside_ndvi)
+
+        min_ndvi_values[i] = inside_ndvi[min_index]
+        max_ndvi_values[i] = inside_ndvi[max_index]
+        mean_ndvi_values[i] = mean_ndvi
+
+    return min_ndvi_values, max_ndvi_values, mean_ndvi_values
 
 def calculate_iou(batch_boxes1, batch_boxes2):
     # Ensure batch_boxes1 and batch_boxes2 are 2D arrays with shape [N, 4]
@@ -600,6 +642,7 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     polygon_y_gpu = cp.array(polygon_y_all_padded, dtype=cp.float32)  # Shape: (num_polygons, max_points)
 
     height_data_gpu = cp.array(height_data, dtype=cp.float32)
+    ndvi_data_gpu = cp.array(ndvi_data, dtype=cp.float32)
 
     # Compute centroids for all polygons on GPU (using the batch processing function)
     centroids = get_centroids(polygon_x_gpu, polygon_y_gpu)
@@ -607,9 +650,22 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     # Perform height data lookups for all polygons at once on the GPU
     heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, width, height, height_bounds)
 
+    # Perform NDVI data lookups for all polygons at once on the GPU, similar to height data lookup
+    min_ndvi, max_ndvi, mean_ndvi = get_ndvi_within_polygon(polygon_x_gpu,
+                                                            polygon_y_gpu,
+                                                            ndvi_data_gpu,
+                                                            ndvi_transform,
+                                                            ndvi_data.shape[0],
+                                                            ndvi_data.shape[1],
+                                                            ndvi_bounds)
+
     # Convert CuPy arrays to NumPy arrays for serialization
     heights = heights.get()  # Convert to NumPy array
     highest_points = highest_points.get()  # Convert to NumPy array
+
+    min_ndvi = min_ndvi.get()
+    max_ndvi = max_ndvi.get()
+    mean_ndvi = mean_ndvi.get()
 
     updated_features = []
 
@@ -621,20 +677,14 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         height = heights[i] if highest_points[i] is not None else -1
         centroid = centroids[i].get()  # Convert centroid from CuPy to NumPy
 
+        min_ndvi = min_ndvi[i]
+        max_ndvi = max_ndvi[i]
+        mean_ndvi = mean_ndvi[i]
+
         try:
             rounded_coords = round_coordinates(feature['geometry']['coordinates'])
         except Exception as e:
             print(f"Error rounding coordinates for polygon {polygon_id}: {e}")
-
-        # Get NDVI values within the polygon
-        polygon = shape(feature['geometry'])
-        min_ndvi, max_ndvi, mean_ndvi = get_ndvi_within_polygon(polygon,
-                                                                ndvi_data,
-                                                                ndvi_transform,
-                                                                ndvi_data.shape[0],
-                                                                ndvi_data.shape[1],
-                                                                ndvi_bounds)
-
 
         # Create a new properties dictionary to avoid direct mutation
         new_properties = dict(feature['properties'])
