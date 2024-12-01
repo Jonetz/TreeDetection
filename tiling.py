@@ -64,29 +64,6 @@ def tile_single_file(
                 
                 # Mask the data using the coordinates and crop
                 out_img, out_transform = mask(data, shapes=coords, crop=True)
-                out_sumbands = np.sum(out_img, 0)
-                
-                # Mask checks for zero and NaN values
-                zero_mask = np.where(out_sumbands == 0, 1, 0)
-                nan_mask = np.where(out_sumbands == 765, 1, 0)
-                totalpix = out_img.shape[1] * out_img.shape[2]
-
-                # Skip tiles with excessive zero or NaN values
-                if zero_mask.sum() > 0.25 * totalpix or nan_mask.sum() > 0.25 * totalpix:
-                    continue
-
-                # Update metadata for the output tile
-                out_meta = data.meta.copy()
-                out_meta.update({
-                    "driver": "GTiff",
-                    "height": out_img.shape[1],
-                    "width": out_img.shape[2],
-                    "transform": out_transform,
-                    "nodata": None,
-                })
-
-                if dtype_bool:
-                    out_meta.update({"dtype": "uint8"})
 
                 # Write the output TIFF file
                 meta_name = out_path_root.with_suffix(".json")
