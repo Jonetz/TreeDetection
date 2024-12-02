@@ -115,11 +115,11 @@ def predict_tiles(config):
         # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
         logger.info(f'Starting prediction with model {config["urban_model"]}...')
         predict_on_model(config, config["urban_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "urban_predictions"))
+                         os.path.join(config["output_directory"], "urban_predictions"), batch_size=config["batch_size"])
         # Predict the tiles using the forrest model
         logger.info(f'Starting prediction with model {config["forrest_model"]}...')
         predict_on_model(config, config["forrest_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "forrest_predictions"))
+                         os.path.join(config["output_directory"], "forrest_predictions"), batch_size=config["batch_size"])
         # Process and stitch predictions for the urban model
         process_and_stitch_predictions(
             tiles_path=config["tiles_path"],

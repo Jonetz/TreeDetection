@@ -118,9 +118,13 @@ def get_config(config_path: str):
     config["continue"] = config.get("continue", os.path.join(config["output_directory"], "continue.yml"))
 
     # 3. Check the tiling parameters
-    config["tile_width"] = config.get("tile_size", 50)
-    config["tile_height"] = config.get("tile_size", 50)
+    # tiles should be optimized to model training 
+    # buffer should be at least 10 meters 
+    # batch size best exerimentally, should be equivalent to 1.2 * Available GPU RAM
+    config["tile_width"] = config.get("tile_width", 50)
+    config["tile_height"] = config.get("tile_height", 50)
     config["buffer"] = config.get("buffer", 0)
+    config["batch_size"] = config.get("batch_size", 10)
 
     # 4. Check the post-processing parameters
     # Stitching
