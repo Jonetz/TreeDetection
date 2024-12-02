@@ -1,4 +1,6 @@
+import asyncio
 import os
+import aiofiles
 import cv2
 import json
 import numpy as np
@@ -21,6 +23,8 @@ from affine import Affine
 
 from shapely.geometry import box, shape
 import cupy as cp
+
+import aiofiles
 
 def exclude_outlines(config):
     for outline in config.get('exclude_files', []):
@@ -431,97 +435,112 @@ def validate_paths(tiles_path, pred_fold, output_path):
     if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
         
+async def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger=None):
+    try:
+        # Match JSON file to corresponding TIFF file
+        tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
+        if not tifpath:
+            raise FileNotFoundError(f"No matching TIFF file for {file}")
+        
+        metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
+        
+        async with aiofiles.open(metadata_path, "r") as meta_file:
+            metadata = json.loads(await meta_file.read())
+        
+        epsg = metadata["crs"]
+        raster_transform = Affine(*metadata["transform"])
+        
+        # Load predictions
+        async with aiofiles.open(file, "r") as pred_file:
+            data = json.loads(await pred_file.read())
+        
+        # Process each prediction
+        features = []
+        for crown_data in data:
+            # If polygon is already stored in the data, skip the creation step
+            if 'polygon_coords' in crown_data:
+                coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
+            else:
+                if "bbox" in crown_data:
+                    bbox = np.array(crown_data["bbox"])
+                    crown_data["bbox"] = bbox.tolist()
+
+                mask = mask_util.decode(crown_data["segmentation"])
+                polygon_coords = polygon_from_mask(mask)
+                if not polygon_coords:
+                    continue
+                crown_data["polygon_coords"] = polygon_coords  # Save the polygon_coords for later use
+                coords = np.array(polygon_coords).reshape(-1, 2)
+            
+            x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
+            polygon = Polygon(zip(x_coords, y_coords))
+
+            features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
+        
+        gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
+        
+        if simplify_tolerance > 0:
+            gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
+        
+        bounding_box = box_filter(tifpath, shift)
+        filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
+        if 'index_right' in filtered_gdf.columns:
+            filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
+        
+        return filtered_gdf
+    except Exception as e:
+        if logger:
+            logger.warn(f"Error processing file {file}: {e}")
+        return None
+
+async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
+    try:
+        image_folder_path = os.path.join(tiles_path, folder)
+        prediction_folder_path = os.path.join(pred_fold, folder)
+        tiff_files = list(Path(image_folder_path).rglob("*.json"))
+        tif_lookup = {Path(tif).stem: Path(tif) for tif in tiff_files}
+        
+        pred_files = list(Path(prediction_folder_path).rglob("*.json"))
+        
+        # Asynchronously process each prediction file
+        tasks = [
+            process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger)
+            for file in pred_files
+        ]
+        results = await asyncio.gather(*tasks)  # Run the tasks concurrently
+        
+        # Combine GeoDataFrames
+        combined_gdf = gpd.GeoDataFrame(pd.concat([res for res in results if res is not None], ignore_index=True))
+        
+        output_file = os.path.join(output_path, f"{folder}.gpkg")
+        combined_gdf.to_file(output_file, driver="GPKG")
+        if logger:
+            logger.info(f"Processed folder {folder} -> {output_file}")
+        
+        return output_file
+    except Exception as e:
+        if logger:
+            logger.error(f"Error processing folder {folder}: {e}")
+        return None
+
 def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None):
-    def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger=None):
-        try:
-            # Match JSON file to corresponding TIFF file
-            tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
-            if not tifpath:
-                raise FileNotFoundError(f"No matching TIFF file for {file}")
-            
-            metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
-            with open(metadata_path, "r") as meta_file:
-                metadata = json.load(meta_file)
-            
-            epsg = metadata["crs"]
-            raster_transform = Affine(*metadata["transform"])
-            
-            # Load predictions
-            with open(file, "r") as pred_file:
-                data = json.load(pred_file)
-            # Process each prediction
-            features = []
-            for crown_data in data:
-                # If polygon is already stored in the data, skip the creation step
-                if 'polygon_coords' in crown_data:
-                    coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
-                else:
-                    if "bbox" in crown_data:
-                        bbox = np.array(crown_data["bbox"])
-                        crown_data["bbox"] = bbox.tolist()
-
-                    mask = mask_util.decode(crown_data["segmentation"])
-                    polygon_coords = polygon_from_mask(mask)
-                    if not polygon_coords:
-                        continue
-                    crown_data["polygon_coords"] = polygon_coords  # Save the polygon_coords for later use
-                    coords = np.array(polygon_coords).reshape(-1, 2)
-                x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
-                polygon = Polygon(zip(x_coords, y_coords))
-
-                features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
-            
-            gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
-            
-            if simplify_tolerance > 0:
-                gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
-            
-            bounding_box = box_filter(tifpath, shift)
-            filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
-            if 'index_right' in filtered_gdf.columns:
-                filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
-            
-            return filtered_gdf
-        except Exception as e:
-            if logger:
-                logger.warn(f"Error processing file {file}: {e}")
-            return None
-
-    def process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
-        try:
-            image_folder_path = os.path.join(tiles_path, folder)
-            prediction_folder_path = os.path.join(pred_fold, folder)
-            tiff_files = list(Path(image_folder_path).rglob("*.json"))
-            tif_lookup = {Path(tif).stem: Path(tif) for tif in tiff_files}
-            
-            pred_files = list(Path(prediction_folder_path).rglob("*.json"))
-            results = [
-                process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger) 
-                for file in pred_files
-            ]
-            combined_gdf = gpd.GeoDataFrame(pd.concat([res for res in results if res is not None], ignore_index=True))
-            
-            output_file = os.path.join(output_path, f"{folder}.gpkg")
-            combined_gdf.to_file(output_file, driver="GPKG")
-            if logger:
-                logger.info(f"Processed folder {folder} -> {output_file}")
-            return output_file
-        except Exception as e:
-            if logger:
-                logger.error(f"Error processing folder {folder}: {e}")
-            return None
     validate_paths(tiles_path, pred_fold, output_path)
     folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = list(executor.map(
-            lambda folder: process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger),
-            folders
-        ))
+    async def process_all_folders():
+        # Use asyncio to process folders concurrently
+        tasks = [
+            process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger)
+            for folder in folders
+        ]
+        return await asyncio.gather(*tasks)  # Run folder processing concurrently
+
+    # Run the asynchronous logic
+    results = asyncio.run(process_all_folders())
+
     if logger:
         logger.info(f"Completed processing. Results saved to {output_path}")
     return output_path
-
 
 def calc_iou(shape1, shape2):
     """Calculate the IoU of two shapes."""
@@ -778,7 +797,6 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                         # Save the fused result as a new GeoJSON file
                 fused_shapes.to_file(output_path, driver="GPKG")
                 logger.debug(f"File saved to {output_path}")
-
 
 def delete_contents(out_dir, logger=None):
     # Check for existing files and remove them synchronously

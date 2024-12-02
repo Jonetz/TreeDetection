@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import os
 import json
+import aiofiles
 import cv2
 import torch
 import rasterio
@@ -20,15 +21,19 @@ class Predictor(DefaultPredictor):
         self.max_batch_size = max_batch_size
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
-
-
+                    
+    async def _save_json_async(self, data, output_file):
+        """Helper function to save JSON data asynchronously."""
+        async with aiofiles.open(output_file, mode="w") as f:
+            await f.write(json.dumps(data))
+        
     def __call__(self, tifpath, tilepath):
         pred_subdir = os.path.join(self.output_dir, os.path.basename(tifpath).replace('.tif', ''))
         os.makedirs(pred_subdir, exist_ok=True)
 
         # Run loading of tiles asynchronously
         tiles = asyncio.run(self._load_tiles_async(tilepath))
-        print(f"Processing {len(tiles)} tiles for {tifpath}")
+        #print(f"Processing {len(tiles)} tiles for {tifpath}")
 
         predictions = []
         batch = []
@@ -52,15 +57,16 @@ class Predictor(DefaultPredictor):
         return predictions
 
     async def _load_tiles_async(self, tilepath):
-        """Load tile metadata from JSON files asynchronously."""
+        """Load tile metadata from JSON files asynchronously, batching file reads."""
         json_files = [os.path.join(tilepath, f) for f in os.listdir(tilepath) if f.endswith('.json')]
-        tiles = []
-        # Use ThreadPoolExecutor for blocking I/O (file reading)
         with ThreadPoolExecutor() as executor:
-            futures = [asyncio.get_event_loop().run_in_executor(executor, self._load_tile_from_file, file_path) for file_path in json_files]
-            results = await asyncio.gather(*futures)
-            tiles.extend(results)
-        return tiles
+            batch_size = 10  # Adjust batch size based on system I/O limits
+            results = []
+            for i in range(0, len(json_files), batch_size):
+                batch = json_files[i:i+batch_size]
+                futures = [asyncio.get_event_loop().run_in_executor(executor, self._load_tile_from_file, file) for file in batch]
+                results.extend(await asyncio.gather(*futures))
+        return results
 
     def _load_tile_from_file(self, file_path):
         """Helper function to load tile data from a single file."""
@@ -75,13 +81,15 @@ class Predictor(DefaultPredictor):
         """Preprocess a single tile."""
         try:
             coords = tile["coords"]
+            
             out_img, _ = mask(img, shapes=coords, crop=True)
+            
             rgb = np.dstack((out_img[2], out_img[1], out_img[0]))
             rgb_rescaled = 255 * rgb / 65535 if np.max(out_img[1]) > 255 else rgb
             height, width = rgb_rescaled.shape[:2]
             tile_image = self.aug.get_transform(rgb_rescaled).apply_image(rgb_rescaled)
             tile_tensor = torch.as_tensor(tile_image.astype("float32").transpose(2, 0, 1))
-            _, orig_height, orig_width = out_img.shape
+            _, orig_height, orig_width = out_img.shape       
             return tile_tensor, {"orig_height": orig_height, "orig_width": orig_width, "height": height, "width": width, "json_name": tile["json_name"]}
         
         except Exception as e:
@@ -127,20 +135,20 @@ class Predictor(DefaultPredictor):
         ):
             # Resize mask
             resized_mask = torch.nn.functional.interpolate(
-                mask.unsqueeze(0).unsqueeze(0).float(),
+                mask.unsqueeze(0).unsqueeze(0).float().to(self.device),
                 size=(orig_height, orig_width),
                 mode="bilinear",
                 align_corners=False,
             ).squeeze(0).squeeze(0)
             
-            resized_mask = resized_mask.cpu().numpy().astype(np.uint8)  # Convert to uint8 for cv2
+            resized_mask = resized_mask.cpu().numpy().astype(np.uint8)
             
             # Convert mask to polygon
             contours, _ = cv2.findContours(
                 resized_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
             )
             for contour in contours:
-                if contour.size >= 10:  # Minimum polygon size
+                if contour.size >= 8:  # Minimum polygon size
                     contour = contour.flatten().tolist()
                     if contour[:2] != contour[-2:]:  # Ensure closed polygon
                         contour.extend(contour[:2])
@@ -157,11 +165,9 @@ class Predictor(DefaultPredictor):
                 "score": score,
                 "polygon_coords": [poly]
             })
+            
+        asyncio.run(self._save_json_async(evaluations, output_file))
         
-        # Save to JSON asynchronously
-        with open(output_file, "w") as f:
-            json.dump(evaluations, f)
-
         return evaluations
 
     def get_features(self, gdf: gpd.GeoDataFrame):
