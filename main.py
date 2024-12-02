@@ -124,7 +124,7 @@ def predict_tiles(config):
             shift=1,
             simplify_tolerance=config['simplify_tolerance'],
             logger=config["logger"],
-            verbose=config["verbose"]
+            #verbose=config["verbose"]
         )
 
         # Process and stitch predictions for the forest model
@@ -136,7 +136,7 @@ def predict_tiles(config):
             shift=1,
             simplify_tolerance=config['simplify_tolerance'],
             logger=config["logger"],
-            verbose=config["verbose"]
+            #verbose=config["verbose"]
         )
 
         logger.info("Predictions have been processed and stitched. Begin fusing the predictions.")
@@ -234,7 +234,7 @@ def process_files(config):
     Process the files according to the configuration.
     """
     # Read the files and tile them
-    preprocess_files(config)
+    #preprocess_files(config)
 
     # Predict the tiles
     predict_tiles(config)

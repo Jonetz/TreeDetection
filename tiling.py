@@ -62,31 +62,8 @@ def tile_single_file(
                 coords = get_features(geo)  # Assuming this function retrieves geometrical features
                 
                 # Mask the data using the coordinates and crop
+                #out_transform = data.window_transform(coords)
                 out_img, out_transform = mask(data, shapes=coords, crop=True)
-
-                # out_sumbands = np.sum(out_img, 0)
-                #
-                # # Mask checks for zero and NaN values
-                # zero_mask = np.where(out_sumbands == 0, 1, 0)
-                # nan_mask = np.where(out_sumbands == 765, 1, 0)
-                # totalpix = out_img.shape[1] * out_img.shape[2]
-                #
-                # # Skip tiles with excessive zero or NaN values
-                # if zero_mask.sum() > 0.25 * totalpix or nan_mask.sum() > 0.25 * totalpix:
-                #     continue
-                #
-                # # Update metadata for the output tile
-                # out_meta = data.meta.copy()
-                # out_meta.update({
-                #     "driver": "GTiff",
-                #     "height": out_img.shape[1],
-                #     "width": out_img.shape[2],
-                #     "transform": out_transform,
-                #     "nodata": None,
-                # })
-                #
-                # if dtype_bool:
-                #     out_meta.update({"dtype": "uint8"})
 
                 # Write the output TIFF file
                 meta_name = out_path_root.with_suffix(".json")
@@ -96,11 +73,6 @@ def tile_single_file(
                 metadata = {"crs": crs, "transform": out_transform, "bounds": [minx - buffer, miny - buffer, minx + tile_width + buffer, miny + tile_height + buffer]}
                 with open(meta_name, "w") as meta_file:
                     json.dump(metadata, meta_file)
-
-                # # Use the in-memory `out_img` array directly to create the RGB for PNG output
-                # rgb = np.dstack((out_img[2], out_img[1], out_img[0]))  # BGR for cv2
-                # rgb_rescaled = 255 * rgb / 65535 if np.max(out_img[1]) > 255 else rgb
-                # cv2.imwrite(str(out_path_root.with_suffix(".png").resolve()), rgb_rescaled)
 
 def tile_data(
     file_list: list,
