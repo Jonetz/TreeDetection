@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import cupy as cp
+import torch
 
 
 def convert_to_python_types(data):
@@ -763,6 +764,7 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
                 process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold,
                                     height_file_path)
+                torch.cuda.empty_cache()
             else:
                 warnings.warn(
                     f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")

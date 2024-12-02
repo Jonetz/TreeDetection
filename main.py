@@ -35,7 +35,7 @@ def postprocess_files(config):
     # 2. Filter with post-processing rules
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
                                config['height_data_path'], confidence_threshold=config['confidence_threshold'],
-                               containment_threshold=config['containment_threshold'], parallel=True,
+                               containment_threshold=config['containment_threshold'], parallel=False,
                                filename_pattern=filename_pattern)
 
     # 4. Save the final predictions as gpkg in another folder
@@ -113,9 +113,11 @@ def predict_tiles(config):
         urban_fold = os.path.join(config["output_directory"], "urban_geojson")
         forrest_fold = os.path.join(config["output_directory"], "forrest_geojson")
         # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
+        logger.info(f'Starting prediction with model {config["urban_model"]}...')
         predict_on_model(config, config["urban_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "urban_predictions"))
         # Predict the tiles using the forrest model
+        logger.info(f'Starting prediction with model {config["forrest_model"]}...')
         predict_on_model(config, config["forrest_model"], config["tiles_path"],
                          os.path.join(config["output_directory"], "forrest_predictions"))
         # Process and stitch predictions for the urban model
@@ -229,8 +231,8 @@ def preprocess_files(config):
 
     # Continue with tiling if there are valid images
     if images_paths:
-        tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"],
-                  max_workers=config["num_workers"], logger=config["logger"])
+        asyncio.run(tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"],
+                  max_workers=config["num_workers"], logger=config["logger"]))
 
     return images_paths
 

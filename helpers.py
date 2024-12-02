@@ -466,7 +466,7 @@ def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_worke
                         continue
                     crown_data["polygon_coords"] = polygon_coords  # Save the polygon_coords for later use
                     coords = np.array(polygon_coords).reshape(-1, 2)
-                x_coords, y_coords = xy(raster_transform, coords[:, 1], coords[:, 0])
+                x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
                 polygon = Polygon(zip(x_coords, y_coords))
 
                 features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
