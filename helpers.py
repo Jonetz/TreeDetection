@@ -1,7 +1,6 @@
 import os
 import cv2
 import json
-from matplotlib import pyplot as plt
 import numpy as np
 import warnings
 import traceback
@@ -22,7 +21,6 @@ from affine import Affine
 
 from shapely.geometry import box, shape
 import cupy as cp
-
 
 def exclude_outlines(config):
     for outline in config.get('exclude_files', []):
@@ -425,122 +423,103 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
 
     return crowns
 
-
-def process_and_stitch_predictions(
-        tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None, verbose=False
-):
-    """
-    Combines projecting predictions to GeoJSON and stitching them into a single GPKG file.
-
-    Args:
-        tiles_path (str): Path to the tiles folder.
-        pred_fold (str): Path to the predictions folder.
-        output_path (str): Path to save the final stitched GPKG file.
-        max_workers (int): Maximum number of threads for parallel processing.
-        shift (int): Number of meters to shift the size of the bounding box for edge filtering.
-        simplify_tolerance (float): Tolerance for geometry simplification (in meters).
-        logger: Logger object for logging messages.
-        verbose (bool): Verbosity flag for detailed logging.
-
-    Returns:
-        str: Path to the stitched GPKG file.
-    """
+def validate_paths(tiles_path, pred_fold, output_path):
     if not os.path.exists(tiles_path) or not os.path.isdir(tiles_path):
         raise FileNotFoundError(f"Tiles path not found: {tiles_path}")
     if not os.path.exists(pred_fold) or not os.path.isdir(pred_fold):
         raise FileNotFoundError(f"Predictions path not found: {pred_fold}")
-    if not os.path.exists(output_path) or not os.path.isdir(output_path):
+    if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
-
-    # Map TIFF files for quick lookup
-    image_folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
-
-    def process_folder(folder):
+        
+def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None):
+    def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger=None):
         try:
-            prediction_folder_path = os.path.join(pred_fold, folder)
-            image_folder_path = os.path.join(tiles_path, folder)
-            tiff_files = list(Path(image_folder_path).rglob("*.json"))
-            tif_lookup = {
-                Path(tif).stem.replace("Prediction_", ""): Path(tif) for tif in tiff_files
-            }
+            # Match JSON file to corresponding TIFF file
+            tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
+            if not tifpath:
+                raise FileNotFoundError(f"No matching TIFF file for {file}")
+            
+            metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
+            with open(metadata_path, "r") as meta_file:
+                metadata = json.load(meta_file)
+            
+            epsg = metadata["crs"]
+            raster_transform = Affine(*metadata["transform"])
+            
+            # Load predictions
+            with open(file, "r") as pred_file:
+                data = json.load(pred_file)
+            # Process each prediction
+            features = []
+            for crown_data in data:
+                # If polygon is already stored in the data, skip the creation step
+                if 'polygon_coords' in crown_data:
+                    coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
+                else:
+                    if "bbox" in crown_data:
+                        bbox = np.array(crown_data["bbox"])
+                        crown_data["bbox"] = bbox.tolist()
 
-            def process_and_filter(file):
-                try:
-                    tile_image_name = file.name
-                    tifpath = tif_lookup.get(tile_image_name.replace("Prediction_", "").replace(".json", ""))
-                    if not tifpath:
-                        raise FileNotFoundError(f"No matching TIFF file for {tile_image_name}")
+                    mask = mask_util.decode(crown_data["segmentation"])
+                    polygon_coords = polygon_from_mask(mask)
+                    if not polygon_coords:
+                        continue
+                    crown_data["polygon_coords"] = polygon_coords  # Save the polygon_coords for later use
+                    coords = np.array(polygon_coords).reshape(-1, 2)
+                x_coords, y_coords = xy(raster_transform, coords[:, 1], coords[:, 0])
+                polygon = Polygon(zip(x_coords, y_coords))
 
-                    metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
-                    with open(metadata_path, "r") as meta_file:
-                        metadata = json.load(meta_file)
-
-                    epsg = metadata["crs"]
-                    raster_transform = Affine(*metadata["transform"])
-
-                    with open(file, "r") as pred_file:
-                        data = json.load(pred_file)
-
-                    features = []
-                    for crown_data in data:
-                        mask = mask_util.decode(crown_data["segmentation"])
-                        polygon_coords = polygon_from_mask(mask)
-                        if not polygon_coords:
-                            continue
-
-                        coords = np.array(polygon_coords).reshape(-1, 2)
-                        x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
-                        polygon = Polygon(zip(x_coords, y_coords))
-
-                        features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
-
-                    # Create GeoDataFrame
-                    gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features],
-                                           crs=f"EPSG:{epsg}")
-
-                    # Simplify geometries
-                    if simplify_tolerance > 0:
-                        gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
-
-                    # Apply spatial filtering
-                    bounding_box = box_filter(tifpath, shift)
-                    filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
-
-                    # Rename 'index_right' to avoid conflict
-                    if 'index_right' in filtered_gdf.columns:
-                        filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
-
-                    return filtered_gdf
-                except Exception as e:
-                    if logger:
-                        logger.warn(f"Error processing file {file}: {e}")
-                    return None
-
-            pred_files = list(Path(prediction_folder_path).rglob("*.json"))
-            results = [process_and_filter(file) for file in pred_files]
-
-            if not pred_files and logger:
-                logger.debug(f"No JSON files found in folder: {folder}")
-                return None
-
-            # Merge all processed GeoDataFrames
-            combined_gdf = gpd.GeoDataFrame(pd.concat([res for res in results if res is not None], ignore_index=True))
-            file_name = f"{os.path.join(output_path, folder)}.gpkg"
-            combined_gdf.to_file(file_name, driver="GPKG")
-
+                features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
+            
+            gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
+            
+            if simplify_tolerance > 0:
+                gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
+            
+            bounding_box = box_filter(tifpath, shift)
+            filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
+            if 'index_right' in filtered_gdf.columns:
+                filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
+            
+            return filtered_gdf
+        except Exception as e:
             if logger:
-                logger.debug(f"Stitched predictions for folder {folder} saved to {file_name}")
-            return file_name
+                logger.warn(f"Error processing file {file}: {e}")
+            return None
+
+    def process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
+        try:
+            image_folder_path = os.path.join(tiles_path, folder)
+            prediction_folder_path = os.path.join(pred_fold, folder)
+            tiff_files = list(Path(image_folder_path).rglob("*.json"))
+            tif_lookup = {Path(tif).stem: Path(tif) for tif in tiff_files}
+            
+            pred_files = list(Path(prediction_folder_path).rglob("*.json"))
+            results = [
+                process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger) 
+                for file in pred_files
+            ]
+            combined_gdf = gpd.GeoDataFrame(pd.concat([res for res in results if res is not None], ignore_index=True))
+            
+            output_file = os.path.join(output_path, f"{folder}.gpkg")
+            combined_gdf.to_file(output_file, driver="GPKG")
+            if logger:
+                logger.info(f"Processed folder {folder} -> {output_file}")
+            return output_file
         except Exception as e:
             if logger:
                 logger.error(f"Error processing folder {folder}: {e}")
             return None
-    # Process folders in parallel
+    validate_paths(tiles_path, pred_fold, output_path)
+    folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
+    
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        _ = list(executor.map(process_folder, image_folders))
-
+        results = list(executor.map(
+            lambda folder: process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger),
+            folders
+        ))
     if logger:
-        logger.info(f"Stitched predictions saved to {output_path}")
+        logger.info(f"Completed processing. Results saved to {output_path}")
     return output_path
 
 
@@ -668,7 +647,6 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
 
     # Filter remaining crowns based on confidence score
     if confidence > 0:
-        print(confidence)
         crowns_out = crowns_out[crowns_out[field] > confidence]
 
     return crowns_out.reset_index(drop=True)

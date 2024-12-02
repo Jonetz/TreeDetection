@@ -1,6 +1,6 @@
 # File handling
-image_directory: "data/rgb"
-height_data_path: "data/nDSM"
+image_directory: "/home/jonas/TreeDetection/data/rgb_anno" #"data/rgb/rgb"
+height_data_path: "/home/jonas/TreeDetection/data/nDSM_anno" #"data/nDSM"
 # combined_model: "/path/to/combined_model"  # or specify the urban_model and forrest_model separately
 urban_model: "data/model_combined.pth"  # optional if combined_model is used
 forrest_model: "data/model_forrest.pth"  # optional if combined_model is used
@@ -8,8 +8,8 @@ forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # optional if combined
 output_directory: "output"  # default: ./output
 tiles_path: "tiles"  # default: ./tiles
 # continue_path: "/home/jonas/tree_detection/tree_detection/output/continue.yml"  # default: ./output/continue.yml
-image_regex: "FDOP20-(\\d+).tif" # default: ".*_fdop.tif" # TODO Implement
-height_data_regex: "nDOM-(\\d+).tif"  # default: ".*_nDSM.tif"# TODO Implement
+image_regex: "FDOP20_(\\d+)_(\\d+)_rgbi\\.tif" # r"FDOP\d{2}_(\d+)_rgbi\.tif"  # default: ".*_fdop.tif"
+height_data_regex: "nDSM_(\\d+)_1km\\.tif"  # default: ".*_nDSM.tif"
 
 # Tile parameters
 tile_width: 50  # default: 50
@@ -19,10 +19,9 @@ buffer: 20  # default: 0
 # Post-processing parameters
 exclude_files:  # default: []
   - "data/BW-Gewaesser/Gewaesserflaechen.shp"
-  - "data/BW-Gewaesser/Gewaesserlinie.shp"
-  - "data/BW-Hausumrisse/gebaeude-bw.shp"
+
 confidence_threshold: 0.3  # default: 0.3 
-containment_threshold: 0.9  # default: 0.9
+containment_threshold: 0.6  # default: 0.9
 height_threshold: 0  # default: 3
 
 # Stiching & Cleaning parameters
@@ -31,10 +30,10 @@ confidence_threshold_stitching: 0.3  # default: 0.3
 area_threshold: 1  # default: 1
 
 # Device and parallelization
-parallel: true  # default: true
+parallel: True  # default: true
 num_workers: 4  # default: 10
 
 # Logging and debugging
 verbose: False  # default: false
-debug: False  # default: false
-keep_intermediate: False  # default: false
+debug: True  # default: false
+keep_intermediate: True  # default: false
