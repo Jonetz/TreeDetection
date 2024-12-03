@@ -27,7 +27,6 @@ async def write_metadata_async(meta_name, metadata):
     """Asynchronously write metadata to a JSON file."""
     async with aiofiles.open(meta_name, "w") as meta_file:
         await meta_file.write(json.dumps(metadata))
-
 async def tile_single_file(
     data_path: str,
     out_dir: str,
@@ -35,15 +34,21 @@ async def tile_single_file(
     tile_width: int = 50,
     tile_height: int = 50,
     dtype_bool: bool = False,
+    forest_shapefile: str = None,
     logger=None,
 ):
-    """Tiling a single raster file and saving output tiles."""
+    """Tiling a single raster file and saving output tiles, with forest/urban flagging."""
     if not os.path.exists(data_path) or not os.path.isfile(data_path):
         raise FileNotFoundError(f"File not found: {data_path}")
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    # Rasterio does not support async context managers, keep this synchronous
+    # Load forest regions if provided
+    forest_regions = None
+    if forest_shapefile:
+        forest_regions = gpd.read_file(forest_shapefile).to_crs(crs=rasterio.open(data_path).crs)
+        forest_sindex = forest_regions.sindex
+
     with rasterio.open(data_path) as data:
         out_path = Path(out_dir)
         crs = data.crs.to_epsg()
@@ -59,6 +64,25 @@ async def tile_single_file(
                     minx + tile_width + buffer,
                     miny + tile_height + buffer,
                 )
+
+                # Initialize flags
+                only_forest, only_urban = False, False
+
+                if forest_regions is not None:
+                    # Efficiently check bounding box overlap using spatial index
+                    possible_matches_index = list(forest_sindex.intersection(bbox.bounds))
+                    possible_matches = forest_regions.iloc[possible_matches_index]
+                    intersecting = possible_matches[possible_matches.intersects(bbox)]
+
+                    if not intersecting.empty:
+                        # If the intersection is not empty, it's at least partially in the forest
+                        only_urban = False  # It's not urban if it intersects with the forest
+
+                        # Check if the intersection is exactly the same as the bounding box
+                        only_forest = intersecting.unary_union.equals(bbox)  # Full containment check
+                    else:
+                        # If there's no intersection, it's entirely outside the forest
+                        only_urban = True
                 geo = gpd.GeoDataFrame({"geometry": bbox}, index=[0], crs=data.crs)
                 coords = get_features(geo)
 
@@ -76,6 +100,8 @@ async def tile_single_file(
                         minx + tile_width + buffer,
                         miny + tile_height + buffer,
                     ],
+                    "only_forest": only_forest,
+                    "only_urban": only_urban,
                 }
                 await write_metadata_async(meta_name, metadata)
 
@@ -85,9 +111,9 @@ async def tile_data(
     buffer: int = 30,
     tile_width: int = 200,
     tile_height: int = 200,
-    dtype_bool: bool = False,
     parallel: bool = False,
     max_workers: int = 4,
+    forest_shapefile: str = None,
     logger=None,
 ):
     """Tiling multiple raster files and saving output tiles."""
@@ -98,13 +124,13 @@ async def tile_data(
         img_out_dir = os.path.join(out_dir, Path(data_path).stem)
         try:
             await tile_single_file(
-                data_path,
-                img_out_dir,
-                buffer,
-                tile_width,
-                tile_height,
-                dtype_bool,
-                logger,
+                data_path=data_path,
+                out_dir=img_out_dir,
+                buffer=buffer,
+                tile_width=tile_width,
+                tile_height=tile_height,
+                forest_shapefile=forest_shapefile,
+                logger=logger,
             )
         except Exception as e:
             if logger:

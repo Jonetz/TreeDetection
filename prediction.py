@@ -15,25 +15,40 @@ from detectron2.evaluation.coco_evaluation import instances_to_coco_json
 
 
 class Predictor(DefaultPredictor):
-    def __init__(self, cfg, device_type="cpu", max_batch_size=5, output_dir='./output'):
+    def __init__(self, cfg, device_type="cpu", max_batch_size=5, output_dir='./output', exclude_vars=None):
+        """
+        Initialize the Predictor class.
+        
+        Args:
+            cfg: Detectron Configuration for the model.
+            device_type: Device to run the model on (e.g., 'cpu', 'cuda').
+            max_batch_size: Maximum number of tiles to process in a batch.
+            output_dir: Directory to save predictions.
+            exclude_vars: List of variables to exclude from tiles, should be given in the metadatafile, if true, the tile will not be predicted (default: None).
+        """
         super().__init__(cfg)
         self.device = device_type
         self.max_batch_size = max_batch_size
         self.output_dir = output_dir
+        self.exclude_vars = exclude_vars or []  # Default to an empty list if None
         os.makedirs(self.output_dir, exist_ok=True)
-                    
+                                        
     async def _save_json_async(self, data, output_file):
         """Helper function to save JSON data asynchronously."""
         async with aiofiles.open(output_file, mode="w") as f:
             await f.write(json.dumps(data))
         
     def __call__(self, tifpath, tilepath):
+        """
+        Wrapper around the inference class, will predict anything from the tifpath with a tiling as given in tilepath
+        
+        Args:
+            tifpath: a path that should contain every tif that was used in the tiling function.
+            tilepath: a path that contains valid metadata to the tiling.
+        """
         pred_subdir = os.path.join(self.output_dir, os.path.basename(tifpath).replace('.tif', ''))
         os.makedirs(pred_subdir, exist_ok=True)
-
-        # Run loading of tiles asynchronously
         tiles = asyncio.run(self._load_tiles_async(tilepath))
-        #print(f"Processing {len(tiles)} tiles for {tifpath}")
 
         predictions = []
         batch = []
@@ -55,9 +70,25 @@ class Predictor(DefaultPredictor):
                 predictions.extend(asyncio.run(self._process_and_save_batch_async(batch, pred_subdir, tifpath)))
 
         return predictions
-
+    
+    def _filter_excluded_vars(self, tiles):
+        """Filter out excluded variables from tile metadata based on self.exclude_vars flags."""
+        filtered_tiles = []
+        for tile in tiles:
+            # Check if any flag in self.exclude_vars is set to True
+            exclude_tile = False     
+            for flag in self.exclude_vars:
+                if tile[flag]:
+                    exclude_tile = True
+            if exclude_tile:
+                continue  # Skip this tile if any exclusion flag is True
+            filtered_tile = {k: v for k, v in tile.items() if k not in self.exclude_vars}
+            filtered_tiles.append(filtered_tile)
+        
+        return filtered_tiles
+        
     async def _load_tiles_async(self, tilepath):
-        """Load tile metadata from JSON files asynchronously, batching file reads."""
+        """Load tile metadata from JSON files asynchronously, with optional exclusion of variables."""
         json_files = [os.path.join(tilepath, f) for f in os.listdir(tilepath) if f.endswith('.json')]
         with ThreadPoolExecutor() as executor:
             batch_size = 10  # Adjust batch size based on system I/O limits
@@ -66,16 +97,28 @@ class Predictor(DefaultPredictor):
                 batch = json_files[i:i+batch_size]
                 futures = [asyncio.get_event_loop().run_in_executor(executor, self._load_tile_from_file, file) for file in batch]
                 results.extend(await asyncio.gather(*futures))
+                
+        # Exclude specified variables if any
+        if self.exclude_vars:
+            results = self._filter_excluded_vars(results)
         return results
-
+    
     def _load_tile_from_file(self, file_path):
         """Helper function to load tile data from a single file."""
         with open(file_path, "r") as file:
-            metadata = json.load(file)
+            metadata = json.load(file)        
+            # Extract the bounding box and create a GeoDataFrame
             bbox = box(*metadata["bounds"][:4])
             geo = gpd.GeoDataFrame({"geometry": [bbox]}, crs="EPSG:4326")
-            coords = self.get_features(geo)
-            return {"coords": coords, "json_name": os.path.basename(file_path)}
+            coords = self._get_features(geo)
+            # Dynamically include exclude_vars in the returned dictionary
+            exclude_flags = {var: metadata.get(var, False) for var in self.exclude_vars}
+            return {
+                "coords": coords,
+                "json_name": os.path.basename(file_path),
+                **exclude_flags,  # Include the exclude flags dynamically
+            }
+
 
     def _process_tile(self, tile, img):
         """Preprocess a single tile."""
@@ -170,6 +213,6 @@ class Predictor(DefaultPredictor):
         
         return evaluations
 
-    def get_features(self, gdf: gpd.GeoDataFrame):
+    def _get_features(self, gdf: gpd.GeoDataFrame):
         """Extract features for rasterio masking."""
         return [json.loads(gdf.to_json())["features"][0]["geometry"]]

@@ -537,9 +537,6 @@ def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_worke
 
     # Run the asynchronous logic
     results = asyncio.run(process_all_folders())
-
-    if logger:
-        logger.info(f"Completed processing. Results saved to {output_path}")
     return output_path
 
 def calc_iou(shape1, shape2):

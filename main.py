@@ -47,7 +47,7 @@ def postprocess_files(config):
         crowns.to_file(os.path.join(config["output_directory"], file.replace('processed_', '')))
 
 #TODO make the batch size a good parameter
-def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10):
+def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10, exclude_vars=None):
     """
     Predict the tiles according to the configuration using mixed precision and parallel inference.
     
@@ -57,6 +57,7 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10)
         tiles_path (str): Path to the directory containing the tiles.
         output_path (str): Path to the output directory.
         batch_size (int): Number of images processed simultaneously.
+        exclude_vars (list): List of variables to exclude from tile metadata. Default is None.
     """
     logger = config.get("logger", None)
 
@@ -70,9 +71,9 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10)
     # Create output directory
     os.makedirs(output_path, exist_ok=True)
 
-    # Initialize model configuration and predictor
+    # Initialize model configuration and predictor with the exclude_vars flag
     cfg = setup_model_cfg(update_model=model_path, device=config["device"])
-    predictor = Predictor(cfg, device_type=config["device"], max_batch_size=batch_size, output_dir=output_path)
+    predictor = Predictor(cfg, device_type=config["device"], max_batch_size=batch_size, output_dir=output_path, exclude_vars=exclude_vars)
 
     # Collect all TIF files
     images_directory = Path(config["image_directory"])
@@ -109,17 +110,18 @@ def predict_tiles(config):
     if config["urban_model"] and os.path.exists(config["urban_model"]) and \
             config["forrest_model"] and os.path.exists(config["forrest_model"]) and \
             config["forrest_outline"] and os.path.exists(config["forrest_outline"]):
+        logger.info("Urban, forrest models and forrest outline are available. Starting prediction...")
 
         urban_fold = os.path.join(config["output_directory"], "urban_geojson")
         forrest_fold = os.path.join(config["output_directory"], "forrest_geojson")
         # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
         logger.info(f'Starting prediction with model {config["urban_model"]}...')
         predict_on_model(config, config["urban_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "urban_predictions"), batch_size=config["batch_size"])
+                         os.path.join(config["output_directory"], "urban_predictions"), batch_size=config["batch_size"], exclude_vars=["only_forest"])
         # Predict the tiles using the forrest model
         logger.info(f'Starting prediction with model {config["forrest_model"]}...')
         predict_on_model(config, config["forrest_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "forrest_predictions"), batch_size=config["batch_size"])
+                         os.path.join(config["output_directory"], "forrest_predictions"), batch_size=config["batch_size"], exclude_vars=["only_urban"])
         # Process and stitch predictions for the urban model
         process_and_stitch_predictions(
             tiles_path=config["tiles_path"],
@@ -169,6 +171,8 @@ def preprocess_files(config):
     """
     Preprocess the files according to the configuration.
     """
+    logger = config["logger"]
+    
     # 1. Read from the dictionary   
     images_directory = config["image_directory"]
     height_data_directory = config["height_data_path"]
@@ -230,9 +234,10 @@ def preprocess_files(config):
             f"No image TIF-files matching the pattern found in the directory: {images_directory} or all files have already been processed.")
 
     # Continue with tiling if there are valid images
+    logger.info(f"Found {len(images_paths)} images for processing. Starting tiling...")
     if images_paths:
-        asyncio.run(tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"],
-                  max_workers=config["num_workers"], logger=config["logger"]))
+        asyncio.run(tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"], parallel=False,
+                  max_workers=config["num_workers"], logger=config["logger"], forest_shapefile=config.get("forrest_outline", None)))
 
     return images_paths
 
