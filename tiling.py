@@ -27,6 +27,7 @@ async def write_metadata_async(meta_name, metadata):
     """Asynchronously write metadata to a JSON file."""
     async with aiofiles.open(meta_name, "w") as meta_file:
         await meta_file.write(json.dumps(metadata))
+        
 async def tile_single_file(
     data_path: str,
     out_dir: str,

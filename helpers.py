@@ -507,11 +507,18 @@ async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simp
             process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger)
             for file in pred_files
         ]
-        results = await asyncio.gather(*tasks)  # Run the tasks concurrently
+        results = await asyncio.gather(*tasks)  # Run the tasks concurrently        
+        # Filter out None results
+        valid_results = [res for res in results if res is not None]
         
-        # Combine GeoDataFrames
-        combined_gdf = gpd.GeoDataFrame(pd.concat([res for res in results if res is not None], ignore_index=True))
-        
+        # If no valid results, create an empty GeoDataFrame
+        if not valid_results:
+            if logger:
+                logger.debug(f"No valid results for folder {folder}. Creating empty output.")
+            combined_gdf = gpd.GeoDataFrame(pd.DataFrame(), crs="EPSG:4326", geometry=gpd.GeoSeries([]))
+        else:
+            # Combine GeoDataFrames
+            combined_gdf = gpd.GeoDataFrame(pd.concat(valid_results, ignore_index=True))        
         output_file = os.path.join(output_path, f"{folder}.gpkg")
         combined_gdf.to_file(output_file, driver="GPKG")
         if logger:
@@ -748,6 +755,23 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                 # Read the urban and forest predictions
                 urban_shapes = gpd.read_file(urban_geojson_path)
                 forest_shapes = gpd.read_file(forest_geojson_path)
+                
+                # If there are no urban shapes, skip the fusion and only process forest
+                if urban_shapes is None or urban_shapes.empty:
+                    output_path = os.path.join(output_dir, os.path.basename(name))
+                    os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+                    forest_shapes.to_file(output_path, driver="GPKG")
+                    logger.debug(f"Only forest file saved to {output_path}")
+                    continue
+
+                # If there are no forest shapes, skip the fusion and only process urban
+                if forest_shapes is None or forest_shapes.empty:
+                    output_path = os.path.join(output_dir, os.path.basename(name))
+                    os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+                    urban_shapes.to_file(output_path, driver="GPKG")
+                    logger.debug(f"Only urban file saved to {output_path}")
+                    continue
+            
                 # Ensure CRS is the same for all geometries
                 if not urban_shapes.crs == forest_shapes.crs == forest_boundary.crs:
                     if logger:
