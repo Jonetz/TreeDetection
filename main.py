@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pathlib import Path
 import sys
 import os
@@ -29,8 +30,8 @@ def postprocess_files(config):
     logger.info("Postprocessing the predictions.")
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
     # 1. Filter with exclude outlines
-    #logger.info("Excluding Outlines.")
-    #exclude_outlines(config)
+    # logger.info("Excluding Outlines.")
+    # exclude_outlines(config)
 
     # 2. Filter with post-processing rules
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
@@ -46,7 +47,8 @@ def postprocess_files(config):
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
         crowns.to_file(os.path.join(config["output_directory"], file.replace('processed_', '')))
 
-#TODO make the batch size a good parameter
+
+# TODO make the batch size a good parameter
 def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10, exclude_vars=None):
     """
     Predict the tiles according to the configuration using mixed precision and parallel inference.
@@ -73,7 +75,8 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
 
     # Initialize model configuration and predictor with the exclude_vars flag
     cfg = setup_model_cfg(update_model=model_path, device=config["device"])
-    predictor = Predictor(cfg, device_type=config["device"], max_batch_size=batch_size, output_dir=output_path, exclude_vars=exclude_vars)
+    predictor = Predictor(cfg, device_type=config["device"], max_batch_size=batch_size, output_dir=output_path,
+                          exclude_vars=exclude_vars)
 
     # Collect all TIF files
     images_directory = Path(config["image_directory"])
@@ -99,7 +102,8 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
         process_image(fp)
 
     logger.info(f"Completed prediction for {len(images_paths)} images.")
-    
+
+
 def predict_tiles(config):
     """
     Predict the tiles according to the configuration.
@@ -116,13 +120,22 @@ def predict_tiles(config):
         forrest_fold = os.path.join(config["output_directory"], "forrest_geojson")
         # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
         logger.info(f'Starting prediction with model {config["urban_model"]}...')
+        start = time.time()
         predict_on_model(config, config["urban_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "urban_predictions"), batch_size=config["batch_size"], exclude_vars=["only_forest"])
+                         os.path.join(config["output_directory"], "urban_predictions"), batch_size=config["batch_size"],
+                         exclude_vars=["only_forest"])
+        end = time.time()
+        predict_on_model_urban_duration = end - start
         # Predict the tiles using the forrest model
         logger.info(f'Starting prediction with model {config["forrest_model"]}...')
+        start = time.time()
         predict_on_model(config, config["forrest_model"], config["tiles_path"],
-                         os.path.join(config["output_directory"], "forrest_predictions"), batch_size=config["batch_size"], exclude_vars=["only_urban"])
+                         os.path.join(config["output_directory"], "forrest_predictions"),
+                         batch_size=config["batch_size"], exclude_vars=["only_urban"])
+        end = time.time()
+        predict_on_model_forrest_duration = end - start
         # Process and stitch predictions for the urban model
+        start = time.time()
         process_and_stitch_predictions(
             tiles_path=config["tiles_path"],
             pred_fold=os.path.join(config["output_directory"], "urban_predictions"),
@@ -131,10 +144,13 @@ def predict_tiles(config):
             shift=1,
             simplify_tolerance=config['simplify_tolerance'],
             logger=config["logger"],
-            #verbose=config["verbose"]
+            # verbose=config["verbose"]
         )
+        end = time.time()
+        process_and_stitch_predictions_urban_duration = end - start
 
         # Process and stitch predictions for the forest model
+        start = time.time()
         process_and_stitch_predictions(
             tiles_path=config["tiles_path"],
             pred_fold=os.path.join(config["output_directory"], "forrest_predictions"),
@@ -143,12 +159,15 @@ def predict_tiles(config):
             shift=1,
             simplify_tolerance=config['simplify_tolerance'],
             logger=config["logger"],
-            #verbose=config["verbose"]
+            # verbose=config["verbose"]
         )
+        end = time.time()
+        process_and_stitch_predictions_forrest_duration = end - start
 
         logger.info("Predictions have been processed and stitched. Begin fusing the predictions.")
 
         # Step 4: Fusion based on forest outline
+        start = time.time()
         fuse_predictions(
             urban_fold,
             forrest_fold,
@@ -156,8 +175,15 @@ def predict_tiles(config):
             os.path.join(config["output_directory"], 'geojson_predictions'),
             logger=config["logger"]
         )
-
+        end = time.time()
+        fuse_predictions_duration = end - start
         logger.info("Fusion based on forest outline has been completed.")
+
+        logger.debug(f"predict on model for urban took {predict_on_model_urban_duration} seconds")
+        logger.debug(f"predict on model for forrest took {predict_on_model_forrest_duration} seconds")
+        logger.debug(f"process and stitch predictions for urban took {process_and_stitch_predictions_urban_duration} seconds")
+        logger.debug(f"process and stitch predictions for forrest took {process_and_stitch_predictions_forrest_duration} seconds")
+        logger.debug(f"fuse prediction took {fuse_predictions_duration} seconds")
 
 
     elif config["combined_model"] and os.path.exists(config["combined_model"]):
@@ -172,8 +198,8 @@ def preprocess_files(config):
     Preprocess the files according to the configuration.
     """
     logger = config["logger"]
-    
-    # 1. Read from the dictionary   
+
+    # 1. Read from the dictionary
     images_directory = config["image_directory"]
     height_data_directory = config["height_data_path"]
     if not os.path.exists(images_directory):
@@ -202,7 +228,7 @@ def preprocess_files(config):
 
     # Filter image paths based on the `image_regex` pattern applied to the base name
     images_paths = [f for f in images_paths if image_regex_pattern.search(os.path.basename(f))]
-        
+
     # Filter for height data files based on base names
     height_data_paths = [f for f in height_paths if height_data_regex_pattern.search(os.path.basename(f))]
 
@@ -236,8 +262,11 @@ def preprocess_files(config):
     # Continue with tiling if there are valid images
     logger.info(f"Found {len(images_paths)} images for processing. Starting tiling...")
     if images_paths:
-        asyncio.run(tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"], parallel=False,
-                  max_workers=config["num_workers"], logger=config["logger"], forest_shapefile=config.get("forrest_outline", None)))
+        asyncio.run(
+            tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"],
+                      parallel=False,
+                      max_workers=config["num_workers"], logger=config["logger"],
+                      forest_shapefile=config.get("forrest_outline", None)))
 
     return images_paths
 
@@ -246,14 +275,25 @@ def process_files(config):
     """
     Process the files according to the configuration.
     """
+    logger = config["logger"]
+
+    start = time.time()
     # Read the files and tile them
     preprocess_files(config)
+    end = time.time()
+    preprocess_files_duration = end - start
 
+    start = time.time()
     # Predict the tiles
     predict_tiles(config)
+    end = time.time()
+    predict_tiles_duration = end - start
 
+    start = time.time()
     # Post-process the predictions
     postprocess_files(config)
+    end = time.time()
+    postprocess_files_duration = end - start
 
     if not config.get('keep_intermediate', False):
         shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
@@ -262,9 +302,12 @@ def process_files(config):
         keep_folders = ["processed_exclusions", "logs"]
         if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get(
                 'keep_intermediate', False):
-           shutil.rmtree(folder)
+            shutil.rmtree(folder)
 
     # Print stats about the processing
+    logger.debug(f"preprocess step took {preprocess_files_duration} seconds. ")
+    logger.debug(f"predict step took {predict_tiles_duration} seconds. ")
+    logger.debug(f"postprocess step took {postprocess_files_duration} seconds. ")
 
 
 def profile_code(config, threshold=0.05):
@@ -296,6 +339,7 @@ def profile_code(config, threshold=0.05):
 
 
 if __name__ == "__main__":
+    # multiprocessing.set_start_method('spawn', force=True)
     config = get_config("config.yml")
 
     # Print Information about the configuration
@@ -303,5 +347,5 @@ if __name__ == "__main__":
     # Start reading the files and validate the configuration
 
     # Start the processing
-    #process_files(config)
+    # process_files(config)
     profile_code(config)

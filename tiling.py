@@ -27,7 +27,7 @@ async def write_metadata_async(meta_name, metadata):
     """Asynchronously write metadata to a JSON file."""
     async with aiofiles.open(meta_name, "w") as meta_file:
         await meta_file.write(json.dumps(metadata))
-        
+
 async def tile_single_file(
     data_path: str,
     out_dir: str,
@@ -53,6 +53,7 @@ async def tile_single_file(
     with rasterio.open(data_path) as data:
         out_path = Path(out_dir)
         crs = data.crs.to_epsg()
+        
         tilename = Path(data.name).stem
 
         for minx in np.arange(data.bounds[0], data.bounds[2], tile_width):
