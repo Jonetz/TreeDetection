@@ -17,7 +17,6 @@ def setup_model_cfg(base_model="COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x
     """
     cfg = get_cfg()
     cfg.merge_from_file(model_zoo.get_config_file(base_model))
-    
     # Set the number of classes (only required if using custom weights with different class count)
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # For a single class like trees
     
@@ -32,6 +31,10 @@ def setup_model_cfg(base_model="COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # Only one class (trees)
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.3  # Set threshold for predictions    
     cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.5
+
+    cfg.CUDNN_BENCHMARK = True
+    cfg.SOLVER.AMP.ENABLED = True
+
     return cfg
 
 def load_config(config_path: str):
@@ -118,9 +121,13 @@ def get_config(config_path: str):
     config["continue"] = config.get("continue", os.path.join(config["output_directory"], "continue.yml"))
 
     # 3. Check the tiling parameters
-    config["tile_width"] = config.get("tile_size", 50)
-    config["tile_height"] = config.get("tile_size", 50)
+    # tiles should be optimized to model training 
+    # buffer should be at least 10 meters 
+    # batch size best exerimentally, should be equivalent to 1.2 * Available GPU RAM
+    config["tile_width"] = config.get("tile_width", 50)
+    config["tile_height"] = config.get("tile_height", 50)
     config["buffer"] = config.get("buffer", 0)
+    config["batch_size"] = config.get("batch_size", 10)
 
     # 4. Check the post-processing parameters
     # Stitching

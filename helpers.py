@@ -1,4 +1,6 @@
+import asyncio
 import os
+import aiofiles
 import cv2
 import json
 import numpy as np
@@ -27,6 +29,9 @@ from concurrent.futures import ThreadPoolExecutor
 from affine import Affine
 
 from shapely.geometry import box, shape
+import cupy as cp
+
+import aiofiles
 
 def exclude_outlines(config):
     for outline in config.get('exclude_files', []):
@@ -67,6 +72,7 @@ class RoundedFloatEncoder(json.JSONEncoder):
             return "[" + ", ".join(self.encode(v) for v in obj) + "]"
         return super().encode(obj)
 
+
 def polygon_from_mask(masked_arr):
     """Convert RLE data from the output instances into Polygons.
 
@@ -93,6 +99,7 @@ def polygon_from_mask(masked_arr):
     else:
         return 0
 
+
 def get_filenames(directory: str):
     """Get the file names if no geojson is present.
 
@@ -110,6 +117,7 @@ def get_filenames(directory: str):
                 dataset_dicts.append({"file_name": file_path})
 
     return dataset_dicts
+
 
 def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger=None, verbose=False):
     """
@@ -202,7 +210,8 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
                 metadata = json.load(meta_file)
                 epsg = metadata["crs"]
                 raster_transform = metadata["transform"]
-            raster_transform = Affine(*metadata["transform"]) if not isinstance(metadata["transform"], Affine) else metadata["transform"]
+            raster_transform = Affine(*metadata["transform"]) if not isinstance(metadata["transform"], Affine) else \
+                metadata["transform"]
 
             # Load the prediction JSON
             with open(filename, "r") as prediction_file:
@@ -249,6 +258,7 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
     if logger and verbose:
         logger.debug("GeoJSON/GPKG projection complete.")
 
+
 def filename_geoinfo(filename):
     """Return geographic info of a tile from its filename.
 
@@ -263,6 +273,7 @@ def filename_geoinfo(filename):
     buffer = parts[3]
     crs = parts[4]
     return (minx, miny, width, buffer, crs)
+
 
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
     """Generate bounding box from geographic specifications.
@@ -289,6 +300,7 @@ def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0)
     geo = gpd.GeoDataFrame({"geometry": bbox}, index=[0], crs=CRS.from_epsg(crs))
     return geo
 
+
 def box_filter(filename, shift: int = 0):
     """Create a bounding box from a file name to filter edge crowns.
 
@@ -305,6 +317,33 @@ def box_filter(filename, shift: int = 0):
     bounding_box = box_make(minx, miny, width, buffer, crs, shift)
     return bounding_box
 
+def xy_gpu(raster_transform, y_coords, x_coords):
+    """
+    Transforms coordinates from raster space to the spatial reference system using the affine transformation matrix.
+
+    Args:
+        raster_transform (Affine): The affine transformation matrix.
+        y_coords (np.ndarray): Array of y-coordinates.
+        x_coords (np.ndarray): Array of x-coordinates.
+
+    Returns:
+        tuple: Transformed x and y coordinates.
+    """
+    # Convert coordinates to cupy arrays for GPU processing
+    y_coords_gpu = cp.asarray(y_coords)
+    x_coords_gpu = cp.asarray(x_coords)
+
+    # Extract affine transformation parameters
+    a, b, c, d, e, f, g, h, i = raster_transform
+
+    # Perform the affine transformation (x', y' = Ax + By + C, Dx + Ey + F)
+    # Using GPU with cupy for parallel processing
+    transformed_x = a * x_coords_gpu + b * y_coords_gpu + c
+    transformed_y = d * x_coords_gpu + e * y_coords_gpu + f
+
+    # Convert the results back to numpy arrays (if needed) or return as cupy arrays for further GPU processing
+    return cp.asnumpy(transformed_x), cp.asnumpy(transformed_y)
+
 def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simplify_tolerance=0.2):
     """
     Stitch together predicted crowns from multiple geojson files, applying a spatial filter.
@@ -314,7 +353,7 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
         shift: Number of meters to shift the size of the bounding box by to avoid edge crowns.
         max_workers: Maximum number of threads for parallel processing.
         logger: Logger object for logging messages.
-        simplify_tolerance: Tolerance level for geometry simplification in meters.
+        simplify_tolerance: Tolerance level for geometry simplification in meters. 
                             Higher values result in more simplification.
 
     Returns:
@@ -349,11 +388,10 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
 
             # Perform spatial join to filter crowns within the box
             crowns_tile = gpd.sjoin(crowns_tile, geo, "inner", "within")
-            
+
             # Simplify geometries if tolerance is set
             if simplify_tolerance > 0:
                 crowns_tile['geometry'] = crowns_tile['geometry'].simplify(simplify_tolerance, preserve_topology=True)
-
 
             return crowns_tile
         except FileNotFoundError:
@@ -395,126 +433,128 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
 
     return crowns
 
-def process_and_stitch_predictions(
-    tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None, verbose=False
-):
-    """
-    Combines projecting predictions to GeoJSON and stitching them into a single GPKG file.
-
-    Args:
-        tiles_path (str): Path to the tiles folder.
-        pred_fold (str): Path to the predictions folder.
-        output_path (str): Path to save the final stitched GPKG file.
-        max_workers (int): Maximum number of threads for parallel processing.
-        shift (int): Number of meters to shift the size of the bounding box for edge filtering.
-        simplify_tolerance (float): Tolerance for geometry simplification (in meters).
-        logger: Logger object for logging messages.
-        verbose (bool): Verbosity flag for detailed logging.
-
-    Returns:
-        str: Path to the stitched GPKG file.
-    """
+def validate_paths(tiles_path, pred_fold, output_path):
     if not os.path.exists(tiles_path) or not os.path.isdir(tiles_path):
         raise FileNotFoundError(f"Tiles path not found: {tiles_path}")
     if not os.path.exists(pred_fold) or not os.path.isdir(pred_fold):
         raise FileNotFoundError(f"Predictions path not found: {pred_fold}")
-    if not os.path.exists(output_path) or not os.path.isdir(output_path):
+    if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
 
-    # Map TIFF files for quick lookup
-    image_folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
 
-    def process_folder(folder):
+async def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger=None, semaphore=None):
+    async with semaphore:  # Limit concurrent tasks
         try:
-            prediction_folder_path = os.path.join(pred_fold, folder)
-            image_folder_path = os.path.join(tiles_path, folder)
-            tiff_files = list(Path(image_folder_path).rglob("*.json"))
-            tif_lookup = {
-                Path(tif).stem.replace("Prediction_", ""): Path(tif) for tif in tiff_files
-            }
-            def process_and_filter(file):
-                try:
-                    tile_image_name = file.name
-                    tifpath = tif_lookup.get(tile_image_name.replace("Prediction_", "").replace(".json", ""))
-                    if not tifpath:
-                        raise FileNotFoundError(f"No matching TIFF file for {tile_image_name}")
+            # Match JSON file to corresponding TIFF file
+            tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
+            if not tifpath:
+                raise FileNotFoundError(f"No matching TIFF file for {file}")
 
-                    metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
-                    with open(metadata_path, "r") as meta_file:
-                        metadata = json.load(meta_file)
+            metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
 
-                    epsg = metadata["crs"]
-                    raster_transform = Affine(*metadata["transform"])
+            async with aiofiles.open(metadata_path, "r") as meta_file:
+                metadata = json.loads(await meta_file.read())
 
-                    with open(file, "r") as pred_file:
-                        data = json.load(pred_file)
+            epsg = metadata["crs"]
+            raster_transform = Affine(*metadata["transform"])
 
-                    features = []
-                    for crown_data in data:
-                        mask = mask_util.decode(crown_data["segmentation"])
-                        polygon_coords = polygon_from_mask(mask)
-                        if not polygon_coords:
-                            continue
+            # Load predictions
+            async with aiofiles.open(file, "r") as pred_file:
+                data = json.loads(await pred_file.read())
 
-                        coords = np.array(polygon_coords).reshape(-1, 2)
-                        x_coords, y_coords = xy(raster_transform, coords[:, 1], coords[:, 0])
-                        polygon = Polygon(zip(x_coords, y_coords))
+            # Process each prediction
+            features = []
+            for crown_data in data:
+                if 'polygon_coords' in crown_data:
+                    coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
+                else:
+                    if "bbox" in crown_data:
+                        bbox = np.array(crown_data["bbox"])
+                        crown_data["bbox"] = bbox.tolist()
 
-                        features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
+                    mask = mask_util.decode(crown_data["segmentation"])
+                    polygon_coords = polygon_from_mask(mask)
+                    if not polygon_coords:
+                        continue
+                    crown_data["polygon_coords"] = polygon_coords
+                    coords = np.array(polygon_coords).reshape(-1, 2)
 
-                    # Create GeoDataFrame
-                    gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
+                x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
+                polygon = Polygon(zip(x_coords, y_coords))
 
-                    # Simplify geometries
-                    if simplify_tolerance > 0:
-                        gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
+                features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
 
-                    # Apply spatial filtering
-                    bounding_box = box_filter(tifpath, shift)
-                    filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
+            gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
 
-                    # Rename 'index_right' to avoid conflict
-                    if 'index_right' in filtered_gdf.columns:
-                        filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
+            if simplify_tolerance > 0:
+                gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
 
-                    return filtered_gdf
-                except Exception as e:
-                    if logger:
-                        logger.warn(f"Error processing file {file}: {e}")
-                    return None
+            bounding_box = box_filter(tifpath, shift)
+            filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
+            if 'index_right' in filtered_gdf.columns:
+                filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
 
-            pred_files = list(Path(prediction_folder_path).rglob("*.json"))
-            results = [process_and_filter(file) for file in pred_files]
-
-            if not pred_files and logger:
-                logger.debug(f"No JSON files found in folder: {folder}")
-                return None
-
-            # Merge all processed GeoDataFrames
-            combined_gdf = gpd.GeoDataFrame(pd.concat([res for res in results if res is not None], ignore_index=True))
-            file_name = f"{os.path.join(output_path, folder)}.gpkg"
-            combined_gdf.to_file(file_name, driver="GPKG")
-
-            if logger:
-                logger.debug(f"Stitched predictions for folder {folder} saved to {file_name}")
-            return file_name
+            return filtered_gdf
         except Exception as e:
             if logger:
-                logger.error(f"Error processing folder {folder}: {e}")
+                logger.warn(f"Error processing file {file}: {e}")
             return None
 
-    # Process folders in parallel
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        _ = list(executor.map(process_folder, image_folders))
+async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None, semaphore=None):
+    try:
+        image_folder_path = os.path.join(tiles_path, folder)
+        prediction_folder_path = os.path.join(pred_fold, folder)
+        tiff_files = list(Path(image_folder_path).rglob("*.json"))
+        tif_lookup = {Path(tif).stem: Path(tif) for tif in tiff_files}
 
-    if logger:
-        logger.info(f"Stitched predictions saved to {output_path}")
+        pred_files = list(Path(prediction_folder_path).rglob("*.json"))
+
+        # Asynchronously process each prediction file
+        tasks = [
+            process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger, semaphore)
+            for file in pred_files
+        ]
+        results = await asyncio.gather(*tasks)  # Run the tasks concurrently
+        # Filter out None results
+        valid_results = [res for res in results if res is not None]
+
+        if not valid_results:
+            if logger:
+                logger.debug(f"No valid results for folder {folder}. Creating empty output.")
+            combined_gdf = gpd.GeoDataFrame(pd.DataFrame(), crs="EPSG:4326", geometry=gpd.GeoSeries([]))
+        else:
+            combined_gdf = gpd.GeoDataFrame(pd.concat(valid_results, ignore_index=True))
+        output_file = os.path.join(output_path, f"{folder}.gpkg")
+        combined_gdf.to_file(output_file, driver="GPKG")
+        if logger:
+            logger.info(f"Processed folder {folder} -> {output_file}")
+
+        return output_file
+    except Exception as e:
+        if logger:
+            logger.error(f"Error processing folder {folder}: {e}")
+        return None
+
+def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None):
+    validate_paths(tiles_path, pred_fold, output_path)
+    folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
+
+    async def process_all_folders():
+        semaphore = asyncio.Semaphore(max_workers)  # Limit the number of concurrent tasks
+        tasks = [
+            process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger, semaphore)
+            for folder in folders
+        ]
+        return await asyncio.gather(*tasks)  # Run folder processing concurrently
+
+    results = asyncio.run(process_all_folders())
     return output_path
 
 def calc_iou(shape1, shape2):
     """Calculate the IoU of two shapes."""
     iou = shape1.intersection(shape2).area / shape1.union(shape2).area
     return iou
+
 
 def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Round the coordinates of the geometries in the GeoDataFrame."""
@@ -535,6 +575,7 @@ def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     crowns['geometry'] = crowns['geometry'].apply(round_geometry)
 
     return crowns
+
 
 def clean_crowns(crowns: gpd.GeoDataFrame,
                  iou_threshold: float = 0.7,
@@ -633,10 +674,10 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
 
     # Filter remaining crowns based on confidence score
     if confidence > 0:
-        print(confidence)
         crowns_out = crowns_out[crowns_out[field] > confidence]
 
     return crowns_out.reset_index(drop=True)
+
 
 def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=None):
     """
@@ -718,6 +759,23 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                 # Read the urban and forest predictions
                 urban_shapes = gpd.read_file(urban_geojson_path)
                 forest_shapes = gpd.read_file(forest_geojson_path)
+
+                # If there are no urban shapes, skip the fusion and only process forest
+                if urban_shapes is None or urban_shapes.empty:
+                    output_path = os.path.join(output_dir, os.path.basename(name))
+                    os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+                    forest_shapes.to_file(output_path, driver="GPKG")
+                    logger.debug(f"Only forest file saved to {output_path}")
+                    continue
+
+                # If there are no forest shapes, skip the fusion and only process urban
+                if forest_shapes is None or forest_shapes.empty:
+                    output_path = os.path.join(output_dir, os.path.basename(name))
+                    os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+                    urban_shapes.to_file(output_path, driver="GPKG")
+                    logger.debug(f"Only urban file saved to {output_path}")
+                    continue
+
                 # Ensure CRS is the same for all geometries
                 if not urban_shapes.crs == forest_shapes.crs == forest_boundary.crs:
                     if logger:
@@ -758,10 +816,12 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                     forest_boundary = fused_shapes.make_valid()
                     fused_shapes['geometry'] = fused_shapes.buffer(0)  # Fix invalid geometries
                     if not all(fused_shapes.is_valid) and logger:
-                        logger.warning(f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")
-                
-                # Save the fused result as a new GeoJSON file
+                        logger.warning(
+                            f"Invalid geometries detected in fused shapes for tile {name}. Attempting to fix.")
+
+                        # Save the fused result as a new GeoJSON file
                 fused_shapes.to_file(output_path, driver="GPKG")
+                logger.debug(f"File saved to {output_path}")
 
 def delete_contents(out_dir, logger=None):
     # Check for existing files and remove them synchronously
