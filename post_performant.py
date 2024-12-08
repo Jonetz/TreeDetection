@@ -574,7 +574,8 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     centroids = get_centroids(polygon_x_gpu, polygon_y_gpu)
 
     # Perform height data lookups for all polygons at once on the GPU
-    heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, width, height, height_bounds)
+    heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, width,
+                                                        height, height_bounds)
 
     # Perform NDVI data lookups for all polygons at once on the GPU, similar to height data lookup
     min_ndvi, max_ndvi, mean_ndvi = get_ndvi_within_polygon(polygon_x_gpu,
@@ -632,7 +633,6 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     heights = heights.get()  # Convert to NumPy array
     highest_points = highest_points.get()  # Convert to NumPy array
 
-
     min_ndvi = min_ndvi.get()
     max_ndvi = max_ndvi.get()
     mean_ndvi = mean_ndvi.get()
@@ -646,10 +646,6 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         # Check if the feature is within the containment threshold and has valid data
         height = heights[i] if highest_points[i] is not None else -1
         centroid = centroids[i].get()  # Convert centroid from CuPy to NumPy
-
-        min_ndvi = min_ndvi[i]
-        max_ndvi = max_ndvi[i]
-        mean_ndvi = mean_ndvi[i]
 
         try:
             rounded_coords = round_coordinates(feature['geometry']['coordinates'])
@@ -666,9 +662,9 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
             'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])},  # Ensure JSON compatibility
             'is_contained': containment_data['is_contained'],
             'num_contained': containment_data['num_contained'],
-            'MeanNDVI': mean_ndvi,
-            'MaxNDVI': max_ndvi,
-            'MinNDVI': min_ndvi
+            'MeanNDVI': mean_ndvi[i],
+            'MaxNDVI': max_ndvi[i],
+            'MinNDVI': min_ndvi[i]
         })
 
         new_feature = {
@@ -802,6 +798,9 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         features = [to_dict(feature) for feature in source]
         schema = source.schema
         crs = source.crs.to_string()
+
+    # TODO: INTRODUCE BATCHING IN POSTPROCESSING
+    features = np.array(features)[:1000]
 
     data = {
         "type": "FeatureCollection",
