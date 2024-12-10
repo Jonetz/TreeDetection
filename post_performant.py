@@ -27,7 +27,7 @@ import numpy as np
 import cupy as cp
 import torch
 
-
+from config import get_config
 from helpers import ndvi_array_from_rgbi
 
 
@@ -352,9 +352,9 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
     ids = list(polygon_dict.keys())
     
     # Convert data to CuPy arrays
-    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids])
-    confidences = cp.array([confidence_scores[pid] for pid in ids])
-    areas = cp.array([id_to_area[pid] for pid in ids])
+    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids], dtype=cp.float16)
+    confidences = cp.array([confidence_scores[pid] for pid in ids], dtype=cp.float16)
+    areas = cp.array([id_to_area[pid] for pid in ids], dtype=cp.float16)
     
     retained_ids = set(ids)
 
@@ -512,6 +512,9 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
 
 
 def process_features(features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, width, height, height_bounds, ndvi_bounds):
+    # TODO: pass config everywhere and just take what's needed
+    config = get_config("config.yml")
+
     polygon_x_all = []
     polygon_y_all = []
     ids_all = []
@@ -598,9 +601,13 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     # Step to further select the polygons based on containment results
     selected_features = []
 
-    for feature in features:
+    for i, feature in enumerate(features):
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
+
+        if mean_ndvi[i] < config['ndvi_threshold']:
+            # Mean NDVI is too small, discard it
+            continue
 
         if containment_data['num_contained'] >= 3:
             # Case 1: Contains at least three other polygons, discard it
@@ -623,7 +630,10 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
             if heights[features.index(feature)] > heights[features.index(other_polygon)] :
                 selected_features.append(feature)
             else:
-                # Handle cases where NDVI or area is preferred
+                # TODO: Handle cases where NDVI or area is preferred
+                # We know that the tree is not as high as the other polygon
+                # Maybe add the feature if the mean of the ndvi is higher by a large amount (e.g. 0.1)
+
                 pass
         else:
             # Case 4: Does not contain anything, no problem, we keep it
@@ -739,13 +749,6 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
     # Prepare confidence scores for selection
     confidence_scores = {feature['properties']['poly_id']: feature['properties']['Confidence_score'] for feature in filtered_features}
 
-    # TODO Make this config parameters
-    iou_threshold = 0.7
-    area_threshold = 0.5
-
-    # 3. Apply filtering to keep only selected polygons
-    retained_ids = filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores, iou_threshold, area_threshold)
-    filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
     # Continue with remaining processing steps
     with rasterio.open(height_data_path) as src:
         height_data = src.read(1)
@@ -759,7 +762,13 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
         ndvi_transform = src.transform
         ndvi_bounds = src.bounds
 
+    # TODO Make this config parameters
+    iou_threshold = 0.7
+    area_threshold = 0.5
 
+    # 3. Apply filtering to keep only selected polygons
+    retained_ids = filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores, iou_threshold, area_threshold)
+    filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
 
     # 4. Filter polygons more complex based on containment and calculate height data for each polygon
     new_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, height_width_tif, height_height_tif, height_bounds, ndvi_bounds)
@@ -798,9 +807,6 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         features = [to_dict(feature) for feature in source]
         schema = source.schema
         crs = source.crs.to_string()
-
-    # TODO: INTRODUCE BATCHING IN POSTPROCESSING
-    features = np.array(features)[:1000]
 
     data = {
         "type": "FeatureCollection",
