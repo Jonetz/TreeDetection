@@ -904,7 +904,7 @@ def create_ndvi_image_from_rgbi(rgbi_path: str, ndvi_path: str, export_tif: bool
 
     for i in range(rgb_normalized.shape[1]):
         for j in range(rgb_normalized.shape[2]):
-            ndvi_array[i, j] = ndvi_index(rgb_normalized[3, i, j], rgb_normalized[0, i, j])
+            ndvi_array[i, j] = ndvi_index(rgb_normalized[0, i, j], rgb_normalized[3, i, j])
 
     ndvi_flattened = np.squeeze(ndvi_array)
 
