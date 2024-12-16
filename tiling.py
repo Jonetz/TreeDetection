@@ -9,9 +9,10 @@ import rasterio
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from shapely.geometry import box
-from rasterio.mask import mask
+from rasterio.mask import mask, geometry_window
 import shutil
-
+from concurrent.futures import ThreadPoolExecutor
+import cupy as cp
 from helpers import delete_contents
 """
 Tiling orthomosaic data.
@@ -34,27 +35,21 @@ async def tile_single_file(
     buffer: int = 0,
     tile_width: int = 50,
     tile_height: int = 50,
-    dtype_bool: bool = False,
-    forest_shapefile: str = None,
+    forest_bounds_gpu: cp.ndarray = None,  # Pass preloaded GPU data
+    forest_regions: gpd.GeoDataFrame = None,  # Keep CPU data for detailed checks
     logger=None,
 ):
-    """Tiling a single raster file and saving output tiles, with forest/urban flagging."""
+    """Tiling a single raster file with GPU-accelerated bounding box checks."""
     if not os.path.exists(data_path) or not os.path.isfile(data_path):
         raise FileNotFoundError(f"File not found: {data_path}")
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
-
-    # Load forest regions if provided
-    forest_regions = None
-    if forest_shapefile:
-        forest_regions = gpd.read_file(forest_shapefile).to_crs(crs=rasterio.open(data_path).crs)
-        forest_sindex = forest_regions.sindex
-
     with rasterio.open(data_path) as data:
         out_path = Path(out_dir)
         crs = data.crs.to_epsg()
-        
+
         tilename = Path(data.name).stem
+        transform = data.transform
 
         for minx in np.arange(data.bounds[0], data.bounds[2], tile_width):
             for miny in np.arange(data.bounds[1], data.bounds[3], tile_height):
@@ -67,29 +62,46 @@ async def tile_single_file(
                     miny + tile_height + buffer,
                 )
 
-                # Initialize flags
                 only_forest, only_urban = False, False
 
-                if forest_regions is not None:
-                    # Efficiently check bounding box overlap using spatial index
-                    possible_matches_index = list(forest_sindex.intersection(bbox.bounds))
-                    possible_matches = forest_regions.iloc[possible_matches_index]
-                    intersecting = possible_matches[possible_matches.intersects(bbox)]
+                if forest_bounds_gpu is not None:
+                    # GPU-based bounding box intersection checks
+                    tile_bounds_gpu = cp.array([minx, miny, minx + tile_width, miny + tile_height])
+                    overlaps = (
+                        (forest_bounds_gpu[:, 2] > tile_bounds_gpu[0]) &  # forest max_x > tile min_x
+                        (forest_bounds_gpu[:, 0] < tile_bounds_gpu[2]) &  # forest min_x < tile max_x
+                        (forest_bounds_gpu[:, 3] > tile_bounds_gpu[1]) &  # forest max_y > tile min_y
+                        (forest_bounds_gpu[:, 1] < tile_bounds_gpu[3])    # forest min_y < tile max_y
+                    )
 
-                    if not intersecting.empty:
-                        # If the intersection is not empty, it's at least partially in the forest
-                        only_urban = False  # It's not urban if it intersects with the forest
+                    overlap_indices = cp.where(overlaps)[0]
+                    if overlap_indices.size > 0:
+                        
+                        # Transfer candidate bounding boxes back to CPU for precise checks
+                        candidate_indices = cp.asnumpy(overlap_indices)
+                        candidates = forest_regions.iloc[candidate_indices]
 
-                        # Check if the intersection is exactly the same as the bounding box
-                        only_forest = intersecting.unary_union.equals(bbox)  # Full containment check
+                        # Create a union of all intersecting bounding boxes
+                        intersecting = candidates[candidates.intersects(bbox)]
+                        if not intersecting.empty:
+                            # Check if the union of the intersecting geometries covers the bbox
+                            union_bbox = intersecting.unary_union
+                            if union_bbox.contains(bbox):  # Replace area check with spatial containment
+                                only_forest = True  # Complete coverage
+                        else:
+                            only_urban = True
                     else:
-                        # If there's no intersection, it's entirely outside the forest
                         only_urban = True
-                geo = gpd.GeoDataFrame({"geometry": bbox}, index=[0], crs=data.crs)
+
+                geo = gpd.GeoDataFrame({"geometry": [bbox]}, index=[0], crs=data.crs)
                 coords = get_features(geo)
 
-                # Synchronously perform masking and transformations
-                out_img, out_transform = mask(data, shapes=coords, crop=True)
+                # Adjust bbox to align with the pixel grid
+                try:
+                    window = geometry_window(data, coords, pad_x=0, pad_y=0)
+                    out_transform = data.window_transform(window)
+                except Exception:
+                    ValueError('Input shapes do not overlap raster, check geometry of incoming Tifs.')
 
                 # Metadata is written asynchronously
                 meta_name = out_path_root.with_suffix(".json")
@@ -118,9 +130,26 @@ async def tile_data(
     forest_shapefile: str = None,
     logger=None,
 ):
-    """Tiling multiple raster files and saving output tiles."""
+    """Tiling multiple raster files with GPU-accelerated bounding box checks."""
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
+
+    forest_regions = None
+    forest_bounds_gpu = None
+
+    # Preprocess forest shapefile if provided
+    if forest_shapefile:
+        # Load the forest shapefile into a GeoDataFrame, ensuring only valid geometries are included
+        forest_regions = gpd.read_file(forest_shapefile, columns='geometry')
+        forest_regions = forest_regions[forest_regions.geometry.notnull()]
+        with rasterio.open(file_list[0]) as src:
+            forest_regions = forest_regions.to_crs(crs=src.crs)
+        if forest_regions.empty:
+            raise ValueError(f"No valid geometries found in the forest shapefile {forest_shapefile}.")
+        forest_bounds = np.array([list(geom.bounds) for geom in forest_regions.geometry])
+        if forest_bounds.size == 0:
+            raise ValueError(f"No valid bounding boxes found in the forest shapefile {forest_shapefile}.")
+        forest_bounds_gpu = cp.array(forest_bounds)
 
     async def process_file(data_path):
         img_out_dir = os.path.join(out_dir, Path(data_path).stem)
@@ -131,7 +160,8 @@ async def tile_data(
                 buffer=buffer,
                 tile_width=tile_width,
                 tile_height=tile_height,
-                forest_shapefile=forest_shapefile,
+                forest_bounds_gpu=forest_bounds_gpu,
+                forest_regions=forest_regions,
                 logger=logger,
             )
         except Exception as e:
@@ -141,6 +171,7 @@ async def tile_data(
                 print(f"Error processing file: {e}")
 
     if parallel:
+        # Choose executor type based on use_threadpool
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             loop = asyncio.get_event_loop()
             tasks = [

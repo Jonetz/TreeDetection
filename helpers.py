@@ -440,82 +440,78 @@ def validate_paths(tiles_path, pred_fold, output_path):
         raise FileNotFoundError(f"Predictions path not found: {pred_fold}")
     if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
-
-
-async def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger=None, semaphore=None):
-    async with semaphore:  # Limit concurrent tasks
-        try:
-            # Match JSON file to corresponding TIFF file
-            tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
-            if not tifpath:
-                raise FileNotFoundError(f"No matching TIFF file for {file}")
-
-            metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
-
-            async with aiofiles.open(metadata_path, "r") as meta_file:
-                metadata = json.loads(await meta_file.read())
-
-            epsg = metadata["crs"]
-            raster_transform = Affine(*metadata["transform"])
-
-            # Load predictions
-            async with aiofiles.open(file, "r") as pred_file:
-                data = json.loads(await pred_file.read())
-
-            # Process each prediction
-            features = []
-            for crown_data in data:
-                if 'polygon_coords' in crown_data:
-                    coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
-                else:
-                    if "bbox" in crown_data:
-                        bbox = np.array(crown_data["bbox"])
-                        crown_data["bbox"] = bbox.tolist()
-
-                    mask = mask_util.decode(crown_data["segmentation"])
-                    polygon_coords = polygon_from_mask(mask)
-                    if not polygon_coords:
-                        continue
-                    crown_data["polygon_coords"] = polygon_coords
-                    coords = np.array(polygon_coords).reshape(-1, 2)
-
-                x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
-                polygon = Polygon(zip(x_coords, y_coords))
-
-                features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
-
-            gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
-
-            if simplify_tolerance > 0:
-                gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
-
-            bounding_box = box_filter(tifpath, shift)
-            filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
-            if 'index_right' in filtered_gdf.columns:
-                filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
-
-            return filtered_gdf
-        except Exception as e:
-            if logger:
-                logger.warn(f"Error processing file {file}: {e}")
-            return None
-
-async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None, semaphore=None):
+       
+def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, logger=None):
     try:
+        # Match JSON file to corresponding TIFF file
+        tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
+        if not tifpath:
+            raise FileNotFoundError(f"No matching TIFF file for {file}")
+        
+        metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
+        with open(metadata_path, "r") as meta_file:
+            metadata = json.load(meta_file)
+        
+        epsg = metadata["crs"]
+        raster_transform = Affine(*metadata["transform"])
+        
+        # Load predictions
+        with open(file, "r") as pred_file:
+            data = json.load(pred_file)
+        
+        # Process each prediction
+        features = []
+        for crown_data in data:
+            if 'polygon_coords' in crown_data:
+                coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
+            else:
+                if "bbox" in crown_data:
+                    bbox = np.array(crown_data["bbox"])
+                    crown_data["bbox"] = bbox.tolist()
+
+                mask = mask_util.decode(crown_data["segmentation"])
+                polygon_coords = polygon_from_mask(mask)
+                if not polygon_coords:
+                    continue
+                crown_data["polygon_coords"] = polygon_coords
+                coords = np.array(polygon_coords).reshape(-1, 2)            
+            polygon = Polygon(coords)
+
+            features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
+        
+        gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
+        
+        if simplify_tolerance > 0:
+            gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
+        
+        bounding_box = box_filter(tifpath, shift)
+        filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
+        if 'index_right' in filtered_gdf.columns:
+            filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
+        
+        return filtered_gdf
+    except Exception as e:
+        if logger:
+            logger.warn(f"Error processing file {file}: {e}")
+        return None
+
+
+def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
+    try:
+        if logger:
+            logger.info(f"Starting {folder}. ")
         image_folder_path = os.path.join(tiles_path, folder)
         prediction_folder_path = os.path.join(pred_fold, folder)
         tiff_files = list(Path(image_folder_path).rglob("*.json"))
         tif_lookup = {Path(tif).stem: Path(tif) for tif in tiff_files}
 
         pred_files = list(Path(prediction_folder_path).rglob("*.json"))
-
-        # Asynchronously process each prediction file
-        tasks = [
-            process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger, semaphore)
+        
+        # Process each prediction file
+        results = [
+            process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, logger)
             for file in pred_files
         ]
-        results = await asyncio.gather(*tasks)  # Run the tasks concurrently
-        # Filter out None results
         valid_results = [res for res in results if res is not None]
 
         if not valid_results:
@@ -524,6 +520,7 @@ async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simp
             combined_gdf = gpd.GeoDataFrame(pd.DataFrame(), crs="EPSG:4326", geometry=gpd.GeoSeries([]))
         else:
             combined_gdf = gpd.GeoDataFrame(pd.concat(valid_results, ignore_index=True))
+        
         output_file = os.path.join(output_path, f"{folder}.gpkg")
         combined_gdf.to_file(output_file, driver="GPKG")
         if logger:
@@ -535,18 +532,30 @@ async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simp
             logger.error(f"Error processing folder {folder}: {e}")
         return None
 
-def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None):
+
+def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=50, shift=1, simplify_tolerance=0.2, logger=None):
     validate_paths(tiles_path, pred_fold, output_path)
     folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
 
     async def process_all_folders():
-        semaphore = asyncio.Semaphore(max_workers)  # Limit the number of concurrent tasks
-        tasks = [
-            process_folder(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger, semaphore)
-            for folder in folders
-        ]
-        return await asyncio.gather(*tasks)  # Run folder processing concurrently
-
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            tasks = [
+                loop.run_in_executor(
+                    executor,
+                    process_folder_sync,
+                    folder,
+                    tiles_path,
+                    pred_fold,
+                    output_path,
+                    shift,
+                    simplify_tolerance,
+                    logger,
+                )
+                for folder in folders
+            ]
+            return await asyncio.gather(*tasks)
+    
     results = asyncio.run(process_all_folders())
     return output_path
 
@@ -752,9 +761,9 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
 
                 output_path = os.path.join(output_dir, os.path.basename(name))
                 os.makedirs(os.path.dirname(output_dir), exist_ok=True)
-                if os.path.isfile(output_path):
-                    logger.debug(f"file {name} already processed")
-                    continue
+                #if os.path.isfile(output_path):
+                #    logger.debug(f"file {name} already processed")
+                #    continue
 
                 # Read the urban and forest predictions
                 urban_shapes = gpd.read_file(urban_geojson_path)
@@ -782,35 +791,37 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                         logger.warning("CRS mismatch detected. Aligning CRS to match the forest boundary.")
                     urban_shapes = urban_shapes.to_crs(forest_boundary.crs)
                     forest_shapes = forest_shapes.to_crs(forest_boundary.crs)
-                # Simplify geometries before clipping and overlaying
-                urban_shapes['geometry'] = urban_shapes.simplify(tolerance=0.1, preserve_topology=True)
-                forest_shapes['geometry'] = forest_shapes.simplify(tolerance=0.1, preserve_topology=True)
+                
+                # Step 1: Get combined bounds of urban_shapes and forest_shapes
+                urban_bounds = urban_shapes.total_bounds  # [minx, miny, maxx, maxy]
+                forest_bounds = forest_shapes.total_bounds  # [minx, miny, maxx, maxy]
 
-                # Clip the forest shapes only to the extent of the urban shapes
-                urban_bounds = urban_shapes.total_bounds
-                forest_clipped = forest_boundary.cx[urban_bounds[0]:urban_bounds[2], urban_bounds[1]:urban_bounds[3]]
+                # Combine the two bounding boxes
+                combined_bounds = [
+                    min(urban_bounds[0], forest_bounds[0]),  # minx
+                    min(urban_bounds[1], forest_bounds[1]),  # miny
+                    max(urban_bounds[2], forest_bounds[2]),  # maxx
+                    max(urban_bounds[3], forest_bounds[3]),  # maxy
+                ]
+                
+                # Step 2: Clip forest_boundary to combined_bounds
+                combined_bbox = box(*combined_bounds)
+                forest_clipped = forest_boundary[forest_boundary.geometry.intersects(combined_bbox)]
+
+                # Step 3: Perform intersection and exclusion operations
+                # Find forest shapes that intersect with the clipped forest boundary
                 forest_intersecting = forest_shapes[forest_shapes.geometry.intersects(forest_clipped.unary_union)]
 
-                # Exclude areas inside the forest boundary from the urban shapes
-                urban_outside_forest = gpd.sjoin(urban_shapes, forest_intersecting, how="left")
-
-                # Filter out rows where 'index_right' is NaN (i.e., areas outside the forest boundary)
-                urban_outside_forest = urban_outside_forest[urban_outside_forest['index_right'].isna()].drop(
-                    columns='index_right')
-
-                # Create a new 'Confidence_score' by prioritizing 'Confidence_score_left'
-                urban_outside_forest['Confidence_score'] = urban_outside_forest['Confidence_score_left'].fillna(
-                    urban_outside_forest['Confidence_score_right'])
-
-                # Now that we have 'Confidence_score', we can drop 'Confidence_score_left' and 'Confidence_score_right'
-                urban_outside_forest = urban_outside_forest.drop(
-                    columns=['Confidence_score_left', 'Confidence_score_right'])
-
-                # Handle any remaining NaN values in 'Confidence_score' by replacing them with a default (e.g., 0)
-                urban_outside_forest['Confidence_score'] = urban_outside_forest['Confidence_score'].fillna(0)
-
-                # Combine the clipped forest shapes and urban shapes outside the forest
+                # Exclude urban areas that are fully within the forest boundary
+                urban_outside_forest = urban_shapes[
+                    ~urban_shapes.geometry.within(forest_clipped.unary_union)
+                ]
+                # Combine the results: clipped forest_shapes and urban_shapes outside the forest boundary
                 fused_shapes = pd.concat([forest_intersecting, urban_outside_forest], ignore_index=True)
+
+                # Ensure all geometries are valid
+                fused_shapes["geometry"] = fused_shapes.geometry.apply(lambda geom: geom.buffer(0) if not geom.is_valid else geom)
+
                 # Ensure the fused geometries are valid
                 if not all(fused_shapes.is_valid):
                     forest_boundary = fused_shapes.make_valid()

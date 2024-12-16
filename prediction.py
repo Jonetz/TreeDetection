@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import os
 import json
+from affine import Affine
 import aiofiles
 import cv2
 import torch
@@ -13,6 +14,7 @@ from shapely.geometry import box
 from detectron2.engine import DefaultPredictor
 from detectron2.evaluation.coco_evaluation import instances_to_coco_json
 
+from helpers import xy_gpu
 
 class Predictor(DefaultPredictor):
     def __init__(self, cfg, device_type="cpu", max_batch_size=5, output_dir='./output', exclude_vars=None):
@@ -115,7 +117,7 @@ class Predictor(DefaultPredictor):
             exclude_flags = {var: metadata.get(var, False) for var in self.exclude_vars}
             return {
                 "coords": coords,
-                "json_name": os.path.basename(file_path),
+                "json_name": file_path,
                 **exclude_flags,  # Include the exclude flags dynamically
             }
 
@@ -162,7 +164,7 @@ class Predictor(DefaultPredictor):
         """Process and save a single prediction from a batch."""
         orig_height = b["orig_height"]
         orig_width = b["orig_width"]
-        output_file = os.path.join(pred_subdir, f"Prediction_{b['json_name']}")
+        output_file = os.path.join(pred_subdir, f"Prediction_{os.path.basename(b['json_name'])}")
 
         if not pred["instances"].has("pred_masks"):
             print("Warning: no masks given, probably false model!")
@@ -189,13 +191,27 @@ class Predictor(DefaultPredictor):
             # Convert mask to polygon
             contours, _ = cv2.findContours(
                 resized_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
-            )
+            )            
             for contour in contours:
                 if contour.size >= 8:  # Minimum polygon size
                     contour = contour.flatten().tolist()
                     if contour[:2] != contour[-2:]:  # Ensure closed polygon
                         contour.extend(contour[:2])
-                    polygons.append(contour)
+                    
+                    # Open the metadata to extract the EPSG and raster transform
+                    metadata_path = b['json_name']
+                    with open(metadata_path, "r") as meta_file:
+                        metadata = json.load(meta_file)
+
+                    epsg = metadata["crs"]
+                    raster_transform = Affine(*metadata["transform"])
+
+                    # Convert polygon coordinates to geographical coordinates
+                    x_coords, y_coords = xy_gpu(raster_transform, contour[1::2], contour[::2])
+                    #polygon = Polygon(zip(x_coords, y_coords))
+
+                    # Append polygon, score, and category to the list
+                    polygons.append(list(zip(x_coords, y_coords)))
                     scores.append(float(score))
                     categories.append(int(category))
 

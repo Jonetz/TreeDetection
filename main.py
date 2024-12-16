@@ -279,13 +279,13 @@ def process_files(config):
 
     start = time.time()
     # Read the files and tile them
-    #preprocess_files(config)
+    preprocess_files(config)
     end = time.time()
     preprocess_files_duration = end - start
 
     start = time.time()
     # Predict the tiles
-    #predict_tiles(config)
+    predict_tiles(config)
     end = time.time()
     predict_tiles_duration = end - start
 

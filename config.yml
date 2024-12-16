@@ -2,7 +2,7 @@
 image_directory: "/home/jonas/TreeDetection/data/rgb_anno" #"data/rgb/rgb"
 height_data_path: "/home/jonas/TreeDetection/data/nDSM_anno" #"data/nDSM"
 # combined_model: "data/model_combined.pth"  # or specify the urban_model and forrest_model separately
-urban_model: "data/model_urban.pth"  # optional if combined_model is used
+urban_model: "data/model_combined.pth"  # optional if combined_model is used
 forrest_model: "data/model_forrest.pth"  # optional if combined_model is used
 forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # optional if combined_model is used
 output_directory: "output"  # default: ./output
@@ -32,7 +32,7 @@ area_threshold: 1  # default: 1
 
 # Device and parallelization
 parallel: True  # default: true
-num_workers: 4  # default: 10
+num_workers: 5  # default: 10
 
 # Logging and debugging
 verbose: False  # default: false
