@@ -217,7 +217,8 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
     return max_heights, max_coordinates
 
 
-def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_data: np.ndarray, transform: np.ndarray, width: int, height: int, bounds: BoundingBox):
+def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_data: np.ndarray,
+                            transform: np.ndarray, width: int, height: int, bounds: BoundingBox):
     """
     Find the minimum, maximum, and mean NDVI values within a polygon from raster NDVI data.
 
@@ -305,17 +306,24 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
             inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
             inside_ndvi = subset.flatten()[inside_mask]
 
-        mean_ndvi = cp.mean(inside_ndvi)
-        var_ndvi = cp.var(inside_ndvi)
+        if inside_ndvi.shape[0] == 0:
+            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
+            min_ndvi_values[i] = -1
+            max_ndvi_values[i] = -1
+            mean_ndvi_values[i] = -1
+            var_ndvi_values[i] = -1
+        else:
+            mean_ndvi = cp.mean(inside_ndvi)
+            var_ndvi = cp.var(inside_ndvi)
 
-        # Handle empty result (fallback to centroid)
-        min_index = cp.argmin(inside_ndvi)
-        max_index = cp.argmax(inside_ndvi)
+            # Handle empty result (fallback to centroid)
+            min_index = cp.argmin(inside_ndvi)
+            max_index = cp.argmax(inside_ndvi)
 
-        min_ndvi_values[i] = inside_ndvi[min_index]
-        max_ndvi_values[i] = inside_ndvi[max_index]
-        mean_ndvi_values[i] = mean_ndvi
-        var_ndvi_values[i] = var_ndvi
+            min_ndvi_values[i] = inside_ndvi[min_index]
+            max_ndvi_values[i] = inside_ndvi[max_index]
+            mean_ndvi_values[i] = mean_ndvi
+            var_ndvi_values[i] = var_ndvi
 
     return min_ndvi_values, max_ndvi_values, mean_ndvi_values, var_ndvi_values
 
@@ -620,10 +628,12 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
 
-        if mean_ndvi[i] < config['ndvi_threshold']:
+        if mean_ndvi[i] < config['ndvi_mean_threshold'] or var_ndvi[i] > config['ndvi_var_threshold']:
             # Mean NDVI is too small, discard it
-            # We should take a conservative approach here, due to some kind of trees also having lower values
-            # We advise for something like 0.05 or lower
+            # We should take a conservative approach here, due to some kind of trees (e.g., in autumn) also having lower values
+
+            # Variance is too high, discard it
+            # If the variance of the NDVI values inside the tree is very high, we probably detected a tree area that includes a street/house/...
             continue
 
         if containment_data['num_contained'] >= 3:
@@ -644,16 +654,10 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
 
             # Sorting logic:
             # TODO Refine sorting logic
-            if heights[features.index(feature)] > heights[features.index(other_polygon)] :
+            if heights[features.index(feature)] > heights[features.index(other_polygon)] or var_ndvi[features.index(feature)] + 0.005 < var_ndvi[features.index(other_polygon)]:
+                # Check for height difference and ndvi variance
+                # If the current tree is higher, we keep it. If the current tree has lower variance by some error margin, we also keep it.
                 selected_features.append([i, feature])
-            else:
-                # TODO: Handle cases where NDVI or area is preferred
-                # Criterium 1: Check if mean is higher by a large amount (e.g. 0.1)
-                # Criterium 2: Check if variance is lower, as low variance means that we probably have better estimation of the tree boundary.
-                #              TODO Do we only need to look out for low values or also for high values?
-                #              We do not take the range, due to being very sensible to outliers
-                # If both do not apply we discard the feature
-                pass
         else:
             # Case 4: Does not contain anything, no problem, we keep it
             selected_features.append([i, feature])
