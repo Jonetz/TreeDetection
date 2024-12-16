@@ -35,7 +35,7 @@ def postprocess_files(config):
 
     # 2. Filter with post-processing rules
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
-                               config['height_data_path'], confidence_threshold=config['confidence_threshold'],
+                               config['height_data_path'], config['image_directory'], confidence_threshold=config['confidence_threshold'],
                                containment_threshold=config['containment_threshold'], parallel=False,
                                filename_pattern=filename_pattern)
 
@@ -279,13 +279,13 @@ def process_files(config):
 
     start = time.time()
     # Read the files and tile them
-    preprocess_files(config)
+    #preprocess_files(config)
     end = time.time()
     preprocess_files_duration = end - start
 
     start = time.time()
     # Predict the tiles
-    predict_tiles(config)
+    #predict_tiles(config)
     end = time.time()
     predict_tiles_duration = end - start
 
@@ -347,5 +347,5 @@ if __name__ == "__main__":
     # Start reading the files and validate the configuration
 
     # Start the processing
-    # process_files(config)
-    profile_code(config)
+    process_files(config)
+    #profile_code(config)

@@ -3,10 +3,21 @@ import re
 import warnings
 
 import json
+import os
+from typing import Tuple
+import sys
+import time
+
 import rasterio
 from fiona.model import to_dict
 import fiona
 
+import shapely
+import numba
+import shapely
+from rasterio._base import Affine
+from rasterio.coords import BoundingBox
+from shapely.geometry import shape, Point
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
 
@@ -15,6 +26,9 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cupy as cp
 import torch
+
+from config import get_config
+from helpers import ndvi_array_from_rgbi
 
 
 def convert_to_python_types(data):
@@ -92,12 +106,12 @@ def is_point_in_polygon_batch(center_x, center_y, radius, px, py):
     Vectorized check if points are inside a circle approximated by the bounding box of the polygon.
     The center of the circle is the centroid of the bounding box, and the radius is the maximum distance
     from the center to any point in the bounding box.
-    
+
     Arguments:
     - polygon_x: (num_vertices, ) x-coordinates of the polygon's vertices
     - polygon_y: (num_vertices, ) y-coordinates of the polygon's vertices
     - px, py: (batch_size, ) x and y coordinates of the points to check
-    
+
     Returns:
     - inside_mask: (batch_size, ) Boolean array where True indicates the point is inside the circle
     """
@@ -130,11 +144,11 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
     """
     # Unpack bounds
     minx, miny, maxx, maxy = bounds
-
+    
     # Determine raster coordinates for bounding box
     min_col, min_row = geo_to_raster(transform, minx, miny)
     max_col, max_row = geo_to_raster(transform, maxx, maxy)
-
+    
     # Clamp values within valid raster bounds
     min_row, max_row = sorted([min(min_row, height - 1), max(max_row, 0)])
     min_col, max_col = sorted([min(min_col, width - 1), max(max_col, 0)])
@@ -143,18 +157,18 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
     subset = height_data[min_row:max_row + 1, min_col:max_col + 1]
     if subset.size == 0:
         print("Error: The subset of height data is empty.")
-        return -1, None
+        return -1, None    
 
-        # Prepare points (x, y) for batch processing
+    # Prepare points (x, y) for batch processing
     rows, cols = np.meshgrid(np.arange(subset.shape[0]), np.arange(subset.shape[1]), indexing='ij')
     rows, cols = rows.flatten(), cols.flatten()
-
+    
     # Convert to geo-coordinates for all points
     x_coords, y_coords = raster_to_geo(transform, rows + min_row, cols + min_col)
 
     # Convert x_coords and y_coords to CuPy arrays for GPU processing
     x_coords_gpu, y_coords_gpu = cp.array(x_coords), cp.array(y_coords)
-
+    
     # Prepare arrays for results
     num_polygons = polygon_x.shape[0]
     max_heights = cp.zeros(num_polygons, dtype=cp.float32)
@@ -166,22 +180,22 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
     for i in range(num_polygons):
         # Get current polygon coordinates
         polygon_x_i, polygon_y_i = polygon_x[i], polygon_y[i]
-
+        
         valid_mask = ~cp.isnan(polygon_x_i) & ~cp.isnan(polygon_y_i)  # Mask to remove NaNs
         valid_x = polygon_x_i[valid_mask]
         valid_y = polygon_y_i[valid_mask]
-
+        
         # Compute the center of the bounding box for the polygon (after filtering NaNs)
         min_x, max_x = valid_x.min(), valid_x.max()
         min_y, max_y = valid_y.min(), valid_y.max()
-
+        
         center_x = (min_x + max_x) / 2
         center_y = (min_y + max_y) / 2
         centers[i] = cp.array([center_x, center_y])
 
         # Compute the radius of the bounding box for the polygon
         radius = (max_x - min_x) + (max_y - min_y) / 4
-
+        
         # Check if points are inside the polygon using a vectorized function
         inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
 
@@ -199,15 +213,126 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
             max_index = cp.argmax(inside_heights)
             max_heights[i] = inside_heights[max_index]
             max_coordinates[i] = inside_coords[max_index]
-
+    
     return max_heights, max_coordinates
+
+
+def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_data: np.ndarray,
+                            transform: np.ndarray, width: int, height: int, bounds: BoundingBox):
+    """
+    Find the minimum, maximum, and mean NDVI values within a polygon from raster NDVI data.
+
+    Args:
+        polygon (shapely.geometry.Polygon): Polygon defining the area of interest.
+        ndvi_data (numpy.ndarray): 2D array of NDVI data from the raster.
+        transform (Affine): Transformation matrix for geo to raster / raster to geo coordinates.
+        width (int): Width of the raster in pixels.
+        height (int): Height of the raster in pixels.
+        bounds (BoundingBox): Bounds of the raster.
+
+    Returns:
+        tuple: (min_ndvi, max_ndvi, mean_ndvi)
+            - min_ndvi (float): Minimum NDVI value within the polygon.
+            - max_ndvi (float): Maximum NDVI value within the polygon.
+            - mean_ndvi (float): Mean NDVI value within the polygon.
+    """
+    # Unpack bounds
+    minx, miny, maxx, maxy = bounds
+
+    # Determine raster coordinates for bounding box
+    min_col, min_row = geo_to_raster(transform, minx, miny)
+    max_col, max_row = geo_to_raster(transform, maxx, maxy)
+
+    # Clamp values within valid raster bounds
+    min_row, max_row = sorted([min(min_row, height - 1), max(max_row, 0)])
+    min_col, max_col = sorted([min(min_col, width - 1), max(max_col, 0)])
+
+    # Extract height data subset based on bounding box
+    subset = ndvi_data[min_row:max_row + 1, min_col:max_col + 1]
+    if subset.size == 0:
+        print("Error: The subset of height data is empty.")
+        return -1, None
+
+        # Prepare points (x, y) for batch processing
+    rows, cols = np.meshgrid(np.arange(subset.shape[0]), np.arange(subset.shape[1]), indexing='ij')
+    rows, cols = rows.flatten(), cols.flatten()
+
+    # Convert to geo-coordinates for all points
+    x_coords, y_coords = raster_to_geo(transform, rows + min_row, cols + min_col)
+
+    # Convert x_coords and y_coords to CuPy arrays for GPU processing
+    x_coords_gpu, y_coords_gpu = cp.array(x_coords, dtype=cp.float32), cp.array(y_coords, dtype=cp.float32)
+
+    # Prepare arrays for results
+    num_polygons = polygon_x.shape[0]
+
+    min_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    max_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    mean_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    var_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+
+    centers = cp.zeros((num_polygons, 2), dtype=cp.float32)
+
+    for i in range(num_polygons):
+        # Get current polygon coordinates
+        polygon_x_i, polygon_y_i = polygon_x[i], polygon_y[i]
+
+        valid_mask = ~cp.isnan(polygon_x_i) & ~cp.isnan(polygon_y_i)  # Mask to remove NaNs
+        valid_x = polygon_x_i[valid_mask]
+        valid_y = polygon_y_i[valid_mask]
+
+        # Compute the center of the bounding box for the polygon (after filtering NaNs)
+        min_x, max_x = valid_x.min(), valid_x.max()
+        min_y, max_y = valid_y.min(), valid_y.max()
+
+        center_x = (min_x + max_x) / 2
+        center_y = (min_y + max_y) / 2
+        centers[i] = cp.array([center_x, center_y])
+
+        scaling_factor = 0.15
+        # Compute the radius of the bounding box for the polygon
+        radius = ((max_x - min_x) + (max_y - min_y) / 4) * scaling_factor
+
+        # Check if points are inside the polygon using a vectorized function
+        inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
+
+        # Extract heights and coordinates where points are inside the polygon
+        inside_ndvi = subset.flatten()[inside_mask]
+
+        # Increase the radius until we have at least 50 points (or the radius is too large)
+        while inside_ndvi.shape[0] < 50 and scaling_factor < 0.3:
+            scaling_factor += 0.05
+            radius = ((max_x - min_x) + (max_y - min_y) / 4) * scaling_factor
+            inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
+            inside_ndvi = subset.flatten()[inside_mask]
+
+        if inside_ndvi.shape[0] == 0:
+            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
+            min_ndvi_values[i] = -1
+            max_ndvi_values[i] = -1
+            mean_ndvi_values[i] = -1
+            var_ndvi_values[i] = -1
+        else:
+            mean_ndvi = cp.mean(inside_ndvi)
+            var_ndvi = cp.var(inside_ndvi)
+
+            # Handle empty result (fallback to centroid)
+            min_index = cp.argmin(inside_ndvi)
+            max_index = cp.argmax(inside_ndvi)
+
+            min_ndvi_values[i] = inside_ndvi[min_index]
+            max_ndvi_values[i] = inside_ndvi[max_index]
+            mean_ndvi_values[i] = mean_ndvi
+            var_ndvi_values[i] = var_ndvi
+
+    return min_ndvi_values, max_ndvi_values, mean_ndvi_values, var_ndvi_values
 
 
 def calculate_iou(batch_boxes1, batch_boxes2):
     # Ensure batch_boxes1 and batch_boxes2 are 2D arrays with shape [N, 4]
     batch_boxes1 = cp.array(batch_boxes1).reshape(-1, 4)
     batch_boxes2 = cp.array(batch_boxes2).reshape(-1, 4)
-
+    
     # Calculate the intersection of boxes using broadcasting
     xA = cp.maximum(batch_boxes1[:, 0][:, None], batch_boxes2[:, 0])  # Broadcast to compare all pairs
     yA = cp.maximum(batch_boxes1[:, 1][:, None], batch_boxes2[:, 1])  # Broadcast to compare all pairs
@@ -216,14 +341,14 @@ def calculate_iou(batch_boxes1, batch_boxes2):
 
     # Calculate the area of intersection
     interArea = cp.maximum(0, xB - xA) * cp.maximum(0, yB - yA)
-
+    
     # Calculate the area of each box
     box1Area = (batch_boxes1[:, 2] - batch_boxes1[:, 0]) * (batch_boxes1[:, 3] - batch_boxes1[:, 1])
     box2Area = (batch_boxes2[:, 2] - batch_boxes2[:, 0]) * (batch_boxes2[:, 3] - batch_boxes2[:, 1])
-
+    
     # Calculate the area of union
     unionArea = box1Area[:, None] + box2Area - interArea  # Broadcast union area computation
-
+    
     # Return IoU for all pairs
     return interArea / unionArea
 
@@ -243,12 +368,12 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
         retained_ids (set): A set of ids of polygons that are retained after filtering.
     """
     ids = list(polygon_dict.keys())
-
+    
     # Convert data to CuPy arrays
-    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids])
-    confidences = cp.array([confidence_scores[pid] for pid in ids])
-    areas = cp.array([id_to_area[pid] for pid in ids])
-
+    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids], dtype=cp.float16)
+    confidences = cp.array([confidence_scores[pid] for pid in ids], dtype=cp.float16)
+    areas = cp.array([id_to_area[pid] for pid in ids], dtype=cp.float16)
+    
     retained_ids = set(ids)
 
     # Create an array to track which polygons to remove
@@ -257,25 +382,25 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
     # Vectorized computation of IoU and area differences
     iou_matrix = calculate_iou(bboxes, bboxes)  # IoU matrix for all pairs
     area_matrix = cp.abs(areas[:, None] - areas) / cp.maximum(areas[:, None], areas)  # Area difference matrix
-
+    
     # Apply IoU and area thresholds to filter polygons
     mask = (iou_matrix > iou_threshold) & (area_matrix < area_threshold)  # Boolean mask for filtering
-
+    
     # Loop through each polygon
     for i in range(len(ids)):
         if remove_indices[i]:
             continue
-
+        
         # Get the indices of the polygons to compare with the current polygon i
         to_remove = cp.where(mask[i])[0]  # Get indices of polygons with which i has IoU > threshold
-
+        
         # Exclude self-comparison (i.e., i == j)
         to_remove = to_remove[to_remove != i]
-
+        
         for j in to_remove:
             if remove_indices[j]:  # Skip if j is already flagged for removal
                 continue
-
+            
             # Apply the condition: if IoU and area difference are above the thresholds
             if confidences[i] >= confidences[j]:
                 remove_indices[j] = True  # Flag j for removal
@@ -315,7 +440,7 @@ def get_centroids(polygon_x_gpu, polygon_y_gpu):
     # Calculate centroids in parallel for all polygons
     centroid_x = cp.mean(polygon_x_gpu, axis=1)
     centroid_y = cp.mean(polygon_y_gpu, axis=1)
-
+    
     return cp.stack((centroid_x, centroid_y), axis=1)
 
 def round_coordinates(polygon, decimals=3):
@@ -345,7 +470,7 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
 
     Returns:
         list: Updated features with 'is_contained' and 'num_contained' properties added.
-    """    
+    """
     # Convert bounding boxes to CuPy arrays
     bounds_gpu = cp.array(polygon_bounds, dtype=cp.float32)  # Shape: (num_polygons, 4)
 
@@ -355,12 +480,12 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
     min_y_outer = bounds_gpu[:, 1][:, None]
     max_x_outer = bounds_gpu[:, 2][:, None]
     max_y_outer = bounds_gpu[:, 3][:, None]
-    
+
     min_x_inner = bounds_gpu[:, 0]
     min_y_inner = bounds_gpu[:, 1]
     max_x_inner = bounds_gpu[:, 2]
     max_y_inner = bounds_gpu[:, 3]
-    
+
     # Calculate intersection dimensions
     inter_min_x = cp.maximum(min_x_outer, min_x_inner[None, :])
     inter_min_y = cp.maximum(min_y_outer, min_y_inner[None, :])
@@ -404,8 +529,10 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
     return updated_features
 
 
-def process_features(features, polygon_dict, id_to_area, containment_threshold, height_data, transform, width, height,
-                     bounds):
+def process_features(features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, width, height, height_bounds, ndvi_bounds):
+    # TODO: pass config everywhere and just take what's needed
+    config = get_config("config.yml")
+
     polygon_x_all = []
     polygon_y_all = []
     ids_all = []
@@ -433,24 +560,24 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         def pad_polygon_coords(polygon_coords_all, max_length):
             """
             Pads a batch of polygons with NaN values to ensure all have the same length.
-            
+
             Args:
                 polygon_coords_all (list of cupy.ndarray): List of 1D arrays of polygon coordinates.
                 max_length (int): The maximum length to which each polygon is padded.
-                
+
             Returns:
                 cupy.ndarray: 2D array where each row represents a padded polygon.
             """
             # Calculate the batch size
             batch_size = len(polygon_coords_all)
-            
+
             # Create an empty array filled with NaN of shape (batch_size, max_length)
             padded_array = cp.full((batch_size, max_length), cp.nan)
-            
+
             # Fill the padded array with the polygon coordinates
             for i, coords in enumerate(polygon_coords_all):
                 padded_array[i, :len(coords)] = cp.array(coords)
-            
+
             return padded_array
 
     # Now use this function to pad the coordinates
@@ -462,29 +589,53 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     polygon_y_gpu = cp.array(polygon_y_all_padded, dtype=cp.float32)  # Shape: (num_polygons, max_points)
 
     height_data_gpu = cp.array(height_data, dtype=cp.float32)
+    ndvi_data_gpu = cp.array(ndvi_data, dtype=cp.float32)
 
     # Compute centroids for all polygons on GPU (using the batch processing function)
     centroids = get_centroids(polygon_x_gpu, polygon_y_gpu)
 
     # Perform height data lookups for all polygons at once on the GPU
-    heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, transform, width, height, bounds)
+    heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, width,
+                                                        height, height_bounds)
+
+    # Perform NDVI data lookups for all polygons at once on the GPU, similar to height data lookup
+    min_ndvi, max_ndvi, mean_ndvi, var_ndvi = get_ndvi_within_polygon(polygon_x_gpu,
+                                                                    polygon_y_gpu,
+                                                                    ndvi_data_gpu,
+                                                                    ndvi_transform,
+                                                                    ndvi_data.shape[0],
+                                                                    ndvi_data.shape[1],
+                                                                    ndvi_bounds)
 
     # Call process_containment_features and retrieve attributes
     polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
     containment_results = process_containment_features(features, ids_all, polygon_bounds, containment_threshold)
 
     # Extract containment results
-    containment_info = {feature['properties']['poly_id']: {'is_contained': feature['properties']['is_contained'], 
-                                                           'num_contained': feature['properties']['num_contained']} 
+    containment_info = {feature['properties']['poly_id']: {'is_contained': feature['properties']['is_contained'],
+                                                           'num_contained': feature['properties']['num_contained']}
                         for feature in containment_results}
+
+    min_ndvi = min_ndvi.get()
+    max_ndvi = max_ndvi.get()
+    mean_ndvi = mean_ndvi.get()
+    var_ndvi = var_ndvi.get()
 
     # Step to further select the polygons based on containment results
     selected_features = []
-    
-    for feature in features:
+
+    for i, feature in enumerate(features):
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
-        
+
+        if mean_ndvi[i] < config['ndvi_mean_threshold'] or var_ndvi[i] > config['ndvi_var_threshold']:
+            # Mean NDVI is too small, discard it
+            # We should take a conservative approach here, due to some kind of trees (e.g., in autumn) also having lower values
+
+            # Variance is too high, discard it
+            # If the variance of the NDVI values inside the tree is very high, we probably detected a tree area that includes a street/house/...
+            continue
+
         if containment_data['num_contained'] >= 3:
             # Case 1: Contains at least three other polygons, discard it
             continue
@@ -500,17 +651,16 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
             # Case 3: Contains one other polygon, apply sorting strategies
             other_polygon_id = [f['properties']['poly_id'] for f in features if containment_info[f['properties']['poly_id']]['is_contained']][0]
             other_polygon = next(f for f in features if f['properties']['poly_id'] == other_polygon_id)
-            
+
             # Sorting logic:
-            # TODO Refine sorting logic 
-            if heights[features.index(feature)] > heights[features.index(other_polygon)] :
-                selected_features.append(feature)
-            else:
-                # Handle cases where NDVI or area is preferred
-                pass
+            # TODO Refine sorting logic
+            if heights[features.index(feature)] > heights[features.index(other_polygon)] or var_ndvi[features.index(feature)] + 0.005 < var_ndvi[features.index(other_polygon)]:
+                # Check for height difference and ndvi variance
+                # If the current tree is higher, we keep it. If the current tree has lower variance by some error margin, we also keep it.
+                selected_features.append([i, feature])
         else:
             # Case 4: Does not contain anything, no problem, we keep it
-            selected_features.append(feature)
+            selected_features.append([i, feature])
 
     # Convert CuPy arrays to NumPy arrays for serialization
     heights = heights.get()  # Convert to NumPy array
@@ -518,7 +668,8 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
 
     updated_features = []
 
-    for i, feature in enumerate(selected_features):
+    # We need to save the indices of selected features, to get the right ndvi indices / heights later
+    for i, feature in selected_features:
         polygon_id = feature['properties']['poly_id']
         area = id_to_area.get(polygon_id, None)
 
@@ -540,7 +691,11 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
             'TreeHeight': height,
             'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])},  # Ensure JSON compatibility
             'is_contained': containment_data['is_contained'],
-            'num_contained': containment_data['num_contained']
+            'num_contained': containment_data['num_contained'],
+            'MeanNDVI': mean_ndvi[i],
+            'VarNDVI': var_ndvi[i],
+            'MaxNDVI': max_ndvi[i],
+            'MinNDVI': min_ndvi[i],
         })
 
         new_feature = {
@@ -561,7 +716,7 @@ def get_centroid_gpu(polygon_x_gpu, polygon_y_gpu):
     y_mean = cp.mean(polygon_y_gpu)
     return cp.array([x_mean, y_mean])
 
-def process_geojson(data, confidence_threshold, containment_threshold, height_data_path, area_threshold=3):
+def process_geojson(data, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path, area_threshold=3):
     """
     Process a GeoJSON object to update features with additional properties based on containment and height data.
 
@@ -614,7 +769,20 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
 
     # Prepare confidence scores for selection
     confidence_scores = {feature['properties']['poly_id']: feature['properties']['Confidence_score'] for feature in filtered_features}
-    
+
+    # Continue with remaining processing steps
+    with rasterio.open(height_data_path) as src:
+        height_data = src.read(1)
+        height_transform = src.transform
+        height_width_tif, height_height_tif = src.width, src.height
+        height_bounds = src.bounds
+
+    with rasterio.open(rgbi_data_path) as src:
+        rgbi_data = src.read()
+        ndvi_data = ndvi_array_from_rgbi(rgbi_data)
+        ndvi_transform = src.transform
+        ndvi_bounds = src.bounds
+
     # TODO Make this config parameters
     iou_threshold = 0.7
     area_threshold = 0.5
@@ -622,15 +790,9 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
     # 3. Apply filtering to keep only selected polygons
     retained_ids = filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores, iou_threshold, area_threshold)
     filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
-    # Continue with remaining processing steps
-    with rasterio.open(height_data_path) as src:
-        height_data = src.read(1)
-        transform = src.transform
-        width_tif, height_tif = src.width, src.height
-        bounds = src.bounds
 
-    # 4. Filter polygons more complex based on containment and calculate height data for each polygon 
-    new_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, height_data, transform, width_tif, height_tif, bounds)
+    # 4. Filter polygons more complex based on containment and calculate height data for each polygon
+    new_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, height_width_tif, height_height_tif, height_bounds, ndvi_bounds)
     data['features'] = new_features
     return data
 
@@ -651,7 +813,7 @@ def order_properties(feature, schema_properties):
     return feature
 
 
-def process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_data_path):
+def process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path):
     """
     Process a single GeoJSON file and save the results to a new file.
 
@@ -671,7 +833,7 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         "type": "FeatureCollection",
         "features": features
     }
-    processed_data = process_geojson(data, confidence_threshold, containment_threshold, height_data_path)
+    processed_data = process_geojson(data, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path)
 
     new_schema = schema.copy()
     new_properties_schema = {
@@ -683,6 +845,10 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         'Centroid': 'str',
         'is_contained': 'str',
         'num_contained': 'int',
+        'MeanNDVI': 'float',
+        'MaxNDVI': 'float',
+        'MinNDVI': 'float',
+        'VarNDVI': 'float'
     }
     new_schema['properties'] = new_properties_schema
 
@@ -709,8 +875,7 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
             dest.write(feature)
 
 
-def process_files_in_directory(directory, height_directory, confidence_threshold, containment_threshold, parallel=True,
-                               filename_pattern=None):
+def process_files_in_directory(directory, height_directory, image_directory, confidence_threshold, containment_threshold, parallel=True, filename_pattern=None):
     """
     Process all GeoJSON files in a directory and save the results.
 
@@ -722,12 +887,13 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         parallel (bool): Whether to process files in parallel (default is True).
     """
     geojson_files = [f for f in os.listdir(directory) if f.endswith('.gpkg')]
-    
+
     if filename_pattern is None:
         height_data_pattern = "(\\d+)\\.tif"
         image_pattern = "(\\d+)\\.tif"
+    else:
+        image_pattern, height_data_pattern = filename_pattern
 
-    image_pattern, height_data_pattern = filename_pattern
     if height_data_pattern is None:
         height_data_pattern = "(\\d+)\\.tif"
     if image_pattern is None:
@@ -735,22 +901,21 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
     image_pattern = re.compile(image_pattern)
     height_data_pattern = re.compile(height_data_pattern)
 
-
-    def find_matching_height_file(base_name):
+    def find_matching_file(base_name, geojson_pattern, search_pattern, directory):
         """Find a matching height data file based on regex groups from the base name."""
-        geojson_match = image_pattern.match(base_name + ".tif")
+        geojson_match = geojson_pattern.match(base_name + ".tif")
         if geojson_match:
             geojson_groups = geojson_match.groups()  # Capture groups for matching
             geojson_concat = ''.join(geojson_groups)
-            for height_file in os.listdir(height_directory):
-                height_match = height_data_pattern.match(height_file)
-                if height_match:
-                    height_groups = height_match.groups()
-                    height_concat = ''.join(
-                        height_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
+            for file in os.listdir(directory):
+                search_match = search_pattern.match(file)
+                if search_match:
+                    search_groups = search_match.groups()
+                    search_concat = ''.join(
+                        search_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
                     # Check if height groups start with geojson groups
-                    if height_concat == geojson_concat:
-                        return os.path.join(height_directory, height_file)
+                    if search_concat == geojson_concat:
+                        return os.path.join(directory, file)
         return None
 
     if not parallel:
@@ -758,12 +923,12 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
         for filename in geojson_files:
             file_path = os.path.join(directory, filename)
             base_name = os.path.splitext(os.path.basename(filename))[0]
-            height_file_path = find_matching_height_file(base_name)
+            height_file_path = find_matching_file(base_name, image_pattern, height_data_pattern, height_directory)#find_matching_height_file(base_name)
+            image_file_path = find_matching_file(base_name, image_pattern, image_pattern, image_directory)#find_matching_image_file(base_name)
 
-            if height_file_path:
+            if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
-                process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold,
-                                    height_file_path)
+                process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path, image_file_path)
                 torch.cuda.empty_cache()
             else:
                 warnings.warn(
@@ -778,13 +943,12 @@ def process_files_in_directory(directory, height_directory, confidence_threshold
                     continue
                 file_path = os.path.join(directory, filename)
                 base_name = os.path.splitext(os.path.basename(filename))[0]
-                height_file_path = find_matching_height_file(base_name)
+                height_file_path = find_matching_file(base_name, image_pattern, height_data_pattern, height_directory)
+                image_file_path = find_matching_file(base_name, image_pattern, image_pattern, image_directory)
 
-                if height_file_path:
+                if height_file_path and image_file_path:
                     processed_file_path = os.path.join(directory, f"processed_{filename}")
-                    futures.append(
-                        executor.submit(process_single_file, file_path, processed_file_path, confidence_threshold,
-                                        containment_threshold, height_file_path))
+                    futures.append(executor.submit(process_single_file, file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path, image_file_path))
                 else:
                     warnings.warn(
                         f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
@@ -830,6 +994,7 @@ if __name__ == "__main__":
 
     geojson_directory = 'output/geojson_predictions'
     height_dir = 'data/nDSM'
+    image_directory = 'data/rgb'
 
-    process_files_in_directory(geojson_directory, height_dir, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD,
+    process_files_in_directory(geojson_directory, height_dir, image_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD,
                                parallel=False)

@@ -7,10 +7,17 @@ import numpy as np
 import warnings
 import traceback
 import shutil
+import time
+import numba as nb
+
 import geopandas as gpd
 import pandas as pd
 
 from pathlib import Path
+
+import rasterio
+from matplotlib import pyplot as plt
+from matplotlib.colors import Normalize
 from rasterio.transform import xy
 from rasterio.crs import CRS
 from shapely.geometry import box, shape, Polygon
@@ -51,7 +58,6 @@ def exclude_outlines(config):
             # Write the filtered crowns back to the original path, overwriting the original file
             crowns_filtered.to_file(file_path, driver='GPKG')
 
-
 class RoundedFloatEncoder(json.JSONEncoder):
     def __init__(self, *args, precision=2, **kwargs):
         self.precision = precision
@@ -72,7 +78,7 @@ def polygon_from_mask(masked_arr):
 
     Leads to a small about of data loss but does not affect performance?
     https://github.com/hazirbas/coco-json-converter/blob/master/generate_coco_json.py <-- adapted from here
-    And we adapted it from detectree2 
+    And we adapted it from detectree2
     """
 
     contours, _ = cv2.findContours(
@@ -314,7 +320,7 @@ def box_filter(filename, shift: int = 0):
 def xy_gpu(raster_transform, y_coords, x_coords):
     """
     Transforms coordinates from raster space to the spatial reference system using the affine transformation matrix.
-    
+
     Args:
         raster_transform (Affine): The affine transformation matrix.
         y_coords (np.ndarray): Array of y-coordinates.
@@ -328,7 +334,7 @@ def xy_gpu(raster_transform, y_coords, x_coords):
     x_coords_gpu = cp.asarray(x_coords)
 
     # Extract affine transformation parameters
-    a, b, c, d, e, f, g, h, i = raster_transform    
+    a, b, c, d, e, f, g, h, i = raster_transform
 
     # Perform the affine transformation (x', y' = Ax + By + C, Dx + Ey + F)
     # Using GPU with cupy for parallel processing
@@ -434,7 +440,7 @@ def validate_paths(tiles_path, pred_fold, output_path):
         raise FileNotFoundError(f"Predictions path not found: {pred_fold}")
     if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
-        
+
 
 async def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger=None, semaphore=None):
     async with semaphore:  # Limit concurrent tasks
@@ -443,19 +449,19 @@ async def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, l
             tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
             if not tifpath:
                 raise FileNotFoundError(f"No matching TIFF file for {file}")
-            
+
             metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
-            
+
             async with aiofiles.open(metadata_path, "r") as meta_file:
                 metadata = json.loads(await meta_file.read())
-            
+
             epsg = metadata["crs"]
             raster_transform = Affine(*metadata["transform"])
-            
+
             # Load predictions
             async with aiofiles.open(file, "r") as pred_file:
                 data = json.loads(await pred_file.read())
-            
+
             # Process each prediction
             features = []
             for crown_data in data:
@@ -472,22 +478,22 @@ async def process_prediction_file(file, tif_lookup, shift, simplify_tolerance, l
                         continue
                     crown_data["polygon_coords"] = polygon_coords
                     coords = np.array(polygon_coords).reshape(-1, 2)
-                
+
                 x_coords, y_coords = xy_gpu(raster_transform, coords[:, 1], coords[:, 0])
                 polygon = Polygon(zip(x_coords, y_coords))
 
                 features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
-            
+
             gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
-            
+
             if simplify_tolerance > 0:
                 gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
-            
+
             bounding_box = box_filter(tifpath, shift)
             filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
             if 'index_right' in filtered_gdf.columns:
                 filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
-            
+
             return filtered_gdf
         except Exception as e:
             if logger:
@@ -500,29 +506,29 @@ async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simp
         prediction_folder_path = os.path.join(pred_fold, folder)
         tiff_files = list(Path(image_folder_path).rglob("*.json"))
         tif_lookup = {Path(tif).stem: Path(tif) for tif in tiff_files}
-        
+
         pred_files = list(Path(prediction_folder_path).rglob("*.json"))
-        
+
         # Asynchronously process each prediction file
         tasks = [
             process_prediction_file(file, tif_lookup, shift, simplify_tolerance, logger, semaphore)
             for file in pred_files
         ]
-        results = await asyncio.gather(*tasks)  # Run the tasks concurrently        
+        results = await asyncio.gather(*tasks)  # Run the tasks concurrently
         # Filter out None results
         valid_results = [res for res in results if res is not None]
-        
+
         if not valid_results:
             if logger:
                 logger.debug(f"No valid results for folder {folder}. Creating empty output.")
             combined_gdf = gpd.GeoDataFrame(pd.DataFrame(), crs="EPSG:4326", geometry=gpd.GeoSeries([]))
         else:
-            combined_gdf = gpd.GeoDataFrame(pd.concat(valid_results, ignore_index=True))        
+            combined_gdf = gpd.GeoDataFrame(pd.concat(valid_results, ignore_index=True))
         output_file = os.path.join(output_path, f"{folder}.gpkg")
         combined_gdf.to_file(output_file, driver="GPKG")
         if logger:
             logger.info(f"Processed folder {folder} -> {output_file}")
-        
+
         return output_file
     except Exception as e:
         if logger:
@@ -532,7 +538,7 @@ async def process_folder(folder, tiles_path, pred_fold, output_path, shift, simp
 def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=4, shift=1, simplify_tolerance=0.2, logger=None):
     validate_paths(tiles_path, pred_fold, output_path)
     folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
-    
+
     async def process_all_folders():
         semaphore = asyncio.Semaphore(max_workers)  # Limit the number of concurrent tasks
         tasks = [
@@ -753,7 +759,7 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                 # Read the urban and forest predictions
                 urban_shapes = gpd.read_file(urban_geojson_path)
                 forest_shapes = gpd.read_file(forest_geojson_path)
-                
+
                 # If there are no urban shapes, skip the fusion and only process forest
                 if urban_shapes is None or urban_shapes.empty:
                     output_path = os.path.join(output_dir, os.path.basename(name))
@@ -769,7 +775,7 @@ def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=
                     urban_shapes.to_file(output_path, driver="GPKG")
                     logger.debug(f"Only urban file saved to {output_path}")
                     continue
-            
+
                 # Ensure CRS is the same for all geometries
                 if not urban_shapes.crs == forest_shapes.crs == forest_boundary.crs:
                     if logger:
@@ -834,3 +840,124 @@ def delete_contents(out_dir, logger=None):
                     logger.error(f"Failed to delete {file_path}: {e}")
                 else:
                     print(f"Failed to delete {file_path}: {e}")
+
+@nb.njit(fastmath=True)
+def ndvi_index(red_value, nir_value):
+    """
+    Calculate the NDVI index from the red and NIR values.
+
+    Args:
+        red_value (float): Red channel value.
+        nir_value (float): NIR channel value.
+
+    Returns:
+        float: NDVI index value.
+    """
+    epsilon = 1e-10
+    ndvi_value = (nir_value - red_value) / (nir_value + red_value + epsilon)
+    if ndvi_value < -1.0 or ndvi_value > 1.0:
+        raise ValueError(f"NDVI value out of range: {ndvi_value}")
+    return ndvi_value
+
+@nb.njit(fastmath=True)
+def ndvi_array_from_rgbi(rgbi_array: np.ndarray):
+    """
+    Calculate the NDVI index from the RGBI array.
+
+    Args:
+        rgbi_array (np.ndarray): Array containing the RGBI values.
+
+    Returns:
+        np.ndarray: Array containing the NDVI index values
+    """
+
+    ndvi_array = np.zeros(shape=(rgbi_array.shape[1], rgbi_array.shape[2]))
+    for i in range(rgbi_array.shape[1]):
+        for j in range(rgbi_array.shape[2]):
+            ndvi_array[i, j] = ndvi_index(rgbi_array[0, i, j] / 255.0, rgbi_array[3, i, j] / 255.0)
+    return ndvi_array
+
+
+def create_ndvi_image_from_rgbi(rgbi_path: str, ndvi_path: str, export_tif: bool = True, export_png: bool = False):
+    """
+    Create an NDVI image from the RGBI image. Mainly for debugging purposes.
+
+    Args:
+        rgbi_path (str): Path to the RGBI image.
+        ndvi_path (str): Path to save the NDVI image.
+        export_tif (bool): Export the NDVI image as a TIFF file.
+        export_png (bool): Export the NDVI image as a PNG file
+
+    Raises:
+        FileNotFoundError: If the RGBI file is not found.
+    """
+    if not os.path.exists(rgbi_path) or not os.path.isfile(rgbi_path):
+        raise FileNotFoundError(f" RGB File not found: {rgbi_path}")
+
+    with rasterio.open(rgbi_path) as rgb_src:
+        print(type(rgb_src))
+        rgbi_array = rgb_src.read()
+
+    ndvi_array = np.zeros(shape=(rgbi_array.shape[1], rgbi_array.shape[2]))
+
+    rgb_normalized = rgbi_array / 255.0
+
+    for i in range(rgb_normalized.shape[1]):
+        for j in range(rgb_normalized.shape[2]):
+            ndvi_array[i, j] = ndvi_index(rgb_normalized[0, i, j], rgb_normalized[3, i, j])
+
+    ndvi_flattened = np.squeeze(ndvi_array)
+
+    image_min = np.min(ndvi_flattened)
+    image_max = np.max(ndvi_flattened)
+
+    # Normalize the values to 0–1
+    normalized_image = (ndvi_flattened - image_min) / (image_max - image_min) * 255.0
+
+    out_path_root_png = Path(ndvi_path)
+
+    if export_png:
+        cv2.imwrite(str(out_path_root_png), normalized_image)
+
+    if export_tif:
+        normalized_image = np.expand_dims(normalized_image, axis=0)
+        out_meta = rgb_src.meta.copy()
+
+        out_meta.update({
+            "driver": "GTiff",
+            "height": rgb_src.shape[0],
+            "width": rgb_src.shape[1],
+            "transform": rgb_src.transform,
+            "nodata": None,
+            "count": 1,
+        })
+
+        # Write the output TIFF file
+        out_tif = out_path_root_png.with_suffix(".tif")
+
+        try:
+            with rasterio.open(out_tif, "w", **out_meta) as dest:
+                dest.write(normalized_image)
+        except Exception as e:
+            print(f"Failed to write {out_tif}: {e}")
+
+
+def plot_ndvi_values(values_array: np.ndarray):
+    # Normalize the data to range [0, 1] for the colormap
+    norm = Normalize(vmin=-1, vmax=1)
+
+    # Apply the viridis colormap
+    colormap = plt.cm.viridis
+    mapped_data = colormap(norm(values_array))  # Convert normalized data to RGBA
+
+    # Specify resolution
+    width, height = 5000, 5000  # Resolution in pixels
+    dpi = 300  # Dots per inch
+    figsize = (width / dpi, height / dpi)  # Size of the figure in inches
+
+    # Create and save the image
+    plt.figure(figsize=figsize, dpi=dpi)
+    plt.imshow(mapped_data, origin='upper')
+    plt.axis('off')  # Turn off axes for visualization
+    plt.savefig("viridis_image_high_res.png", dpi=dpi, bbox_inches='tight', pad_inches=0)
+    plt.show()
