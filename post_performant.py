@@ -289,7 +289,7 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
         center_y = (min_y + max_y) / 2
         centers[i] = cp.array([center_x, center_y])
 
-        scaling_factor = 0.15
+        scaling_factor = 0.5
         # Compute the radius of the bounding box for the polygon
         radius = ((max_x - min_x) + (max_y - min_y) / 4) * scaling_factor
 
@@ -300,12 +300,10 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
         inside_ndvi = subset.flatten()[inside_mask]
 
         # Increase the radius until we have at least 50 points (or the radius is too large)
-        while inside_ndvi.shape[0] < 50 and scaling_factor < 0.3:
-            scaling_factor += 0.05
-            radius = ((max_x - min_x) + (max_y - min_y) / 4) * scaling_factor
-            inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
-            inside_ndvi = subset.flatten()[inside_mask]
-
+        #radius = ((max_x - min_x) + (max_y - min_y) / 4) * scaling_factor
+        #inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
+        #inside_ndvi = subset.flatten()[inside_mask]
+        
         if inside_ndvi.shape[0] == 0:
             print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
             min_ndvi_values[i] = -1
@@ -326,7 +324,6 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
             var_ndvi_values[i] = var_ndvi
 
     return min_ndvi_values, max_ndvi_values, mean_ndvi_values, var_ndvi_values
-
 
 def calculate_iou(batch_boxes1, batch_boxes2):
     # Ensure batch_boxes1 and batch_boxes2 are 2D arrays with shape [N, 4]
@@ -370,7 +367,7 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
     ids = list(polygon_dict.keys())
     
     # Convert data to CuPy arrays
-    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids], dtype=cp.float16)
+    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids])
     confidences = cp.array([confidence_scores[pid] for pid in ids], dtype=cp.float16)
     areas = cp.array([id_to_area[pid] for pid in ids], dtype=cp.float16)
     
@@ -386,27 +383,24 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
     # Apply IoU and area thresholds to filter polygons
     mask = (iou_matrix > iou_threshold) & (area_matrix < area_threshold)  # Boolean mask for filtering
     
-    # Loop through each polygon
+    # Loop through each polygon and retain only the one with the highest confidence per group
     for i in range(len(ids)):
         if remove_indices[i]:
-            continue
-        
-        # Get the indices of the polygons to compare with the current polygon i
-        to_remove = cp.where(mask[i])[0]  # Get indices of polygons with which i has IoU > threshold
-        
-        # Exclude self-comparison (i.e., i == j)
-        to_remove = to_remove[to_remove != i]
-        
-        for j in to_remove:
-            if remove_indices[j]:  # Skip if j is already flagged for removal
-                continue
-            
-            # Apply the condition: if IoU and area difference are above the thresholds
-            if confidences[i] >= confidences[j]:
-                remove_indices[j] = True  # Flag j for removal
-            else:
-                remove_indices[i] = True  # Flag i for removal
-                break  # Once one is flagged, no need to compare further with this polygon
+            continue  # Skip already marked polygons
+
+        # Get indices of polygons connected to the current polygon (including self)
+        connected = cp.where(mask[i])[0]  # Indices with IoU > threshold and area < threshold
+
+        # Include self in the connected group
+        connected = cp.append(connected, i)
+
+        # Find the polygon with the highest confidence in the group
+        best_idx = connected[cp.argmax(confidences[connected])]
+
+        # Flag all other polygons in the group for removal
+        for j in connected:
+            if j != best_idx:
+                remove_indices[j] = True  # Flag for removal
 
     # Determine which polygons to remove
     remove_ids = {ids[i] for i in range(len(ids)) if remove_indices[i]}
@@ -625,6 +619,8 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     selected_features = []
 
     for i, feature in enumerate(features):
+        selected_features.append([i, feature])
+        continue
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
 
@@ -661,6 +657,7 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
         else:
             # Case 4: Does not contain anything, no problem, we keep it
             selected_features.append([i, feature])
+            
 
     # Convert CuPy arrays to NumPy arrays for serialization
     heights = heights.get()  # Convert to NumPy array
