@@ -422,20 +422,22 @@ def calculate_area(polygon):
 
 def get_centroids(polygon_x_gpu, polygon_y_gpu):
     """
-    Compute the centroids for all polygons in the batch.
+    Compute the centroids for all polygons in the batch, ignoring NaN values within polygons.
     
     Args:
-        polygon_x_gpu (ndarray): x-coordinates of all polygons.
-        polygon_y_gpu (ndarray): y-coordinates of all polygons.
+        polygon_x_gpu (ndarray): x-coordinates of all polygons (padded with NaNs).
+        polygon_y_gpu (ndarray): y-coordinates of all polygons (padded with NaNs).
     
     Returns:
         centroids (ndarray): The centroids of all polygons.
     """
-    # Calculate centroids in parallel for all polygons
-    centroid_x = cp.mean(polygon_x_gpu, axis=1)
-    centroid_y = cp.mean(polygon_y_gpu, axis=1)
-    
-    return cp.stack((centroid_x, centroid_y), axis=1)
+    # Compute centroids, ignoring NaNs within each polygon
+    centroid_x = cp.nanmean(polygon_x_gpu, axis=1)
+    centroid_y = cp.nanmean(polygon_y_gpu, axis=1)
+
+    # Combine centroids into a single array
+    centroids = cp.stack((centroid_x, centroid_y), axis=1)
+    return centroids
 
 def round_coordinates(polygon, decimals=3):
     """
@@ -591,7 +593,9 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     # Perform height data lookups for all polygons at once on the GPU
     heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, width,
                                                         height, height_bounds)
-
+    
+    # TODO: Kick out all polygons with height < threshold
+    
     # Perform NDVI data lookups for all polygons at once on the GPU, similar to height data lookup
     min_ndvi, max_ndvi, mean_ndvi, var_ndvi = get_ndvi_within_polygon(polygon_x_gpu,
                                                                     polygon_y_gpu,
@@ -600,7 +604,9 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
                                                                     ndvi_data.shape[0],
                                                                     ndvi_data.shape[1],
                                                                     ndvi_bounds)
-
+    
+    # TODO Kick out all polygons with mean_ndvi < threshold or var_ndvi > threshold
+    
     # Call process_containment_features and retrieve attributes
     polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
     containment_results = process_containment_features(features, ids_all, polygon_bounds, containment_threshold)
@@ -619,18 +625,15 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     selected_features = []
 
     for i, feature in enumerate(features):
-        selected_features.append([i, feature])
-        continue
+        #TODO Delete this if implemented above (to account for lazy computation)
+        if heights[i] < config['height_threshold']:
+            # Height is too small, discard it
+            continue
+        if mean_ndvi[i] < config['ndvi_mean_threshold'] or var_ndvi[i] > config['ndvi_var_threshold']:
+            continue
+        
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
-
-        if mean_ndvi[i] < config['ndvi_mean_threshold'] or var_ndvi[i] > config['ndvi_var_threshold']:
-            # Mean NDVI is too small, discard it
-            # We should take a conservative approach here, due to some kind of trees (e.g., in autumn) also having lower values
-
-            # Variance is too high, discard it
-            # If the variance of the NDVI values inside the tree is very high, we probably detected a tree area that includes a street/house/...
-            continue
 
         if containment_data['num_contained'] >= 3:
             # Case 1: Contains at least three other polygons, discard it
@@ -649,15 +652,18 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
             other_polygon = next(f for f in features if f['properties']['poly_id'] == other_polygon_id)
 
             # Sorting logic:
-            # TODO Refine sorting logic
-            if heights[features.index(feature)] > heights[features.index(other_polygon)] or var_ndvi[features.index(feature)] + 0.005 < var_ndvi[features.index(other_polygon)]:
-                # Check for height difference and ndvi variance
-                # If the current tree is higher, we keep it. If the current tree has lower variance by some error margin, we also keep it.
-                selected_features.append([i, feature])
+            # Case 3.1: If NDVI Values differ by more than 0.05, keep the one with less variance
+            if abs(mean_ndvi[features.index(feature)] - mean_ndvi[features.index(other_polygon)]) > 0.05:
+                if var_ndvi[i] < var_ndvi[features.index(other_polygon)]:
+                    selected_features.append([i, feature])
+                else:
+                    selected_features.append([int(other_polygon_id), other_polygon])            
+            # Case 3.2: Fallback Big area
+            elif id_to_area.get(polygon_id, 0) > id_to_area.get(int(other_polygon_id), 0):
+                selected_features.append([i, feature])            
         else:
             # Case 4: Does not contain anything, no problem, we keep it
             selected_features.append([i, feature])
-            
 
     # Convert CuPy arrays to NumPy arrays for serialization
     heights = heights.get()  # Convert to NumPy array
@@ -669,9 +675,12 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     for i, feature in selected_features:
         polygon_id = feature['properties']['poly_id']
         area = id_to_area.get(polygon_id, None)
-
         # Check if the feature is within the containment threshold and has valid data
-        height = heights[i] if highest_points[i] is not None else -1
+        if highest_points[i] is not None:
+            height = heights[i]  
+        else:
+            height = -1
+
         centroid = centroids[i].get()  # Convert centroid from CuPy to NumPy
 
         try:
