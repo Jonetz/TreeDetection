@@ -24,6 +24,8 @@ exclude_files:  # default: []
 confidence_threshold: 0.3  # default: 0.3 
 containment_threshold: 0.6  # default: 0.9
 height_threshold: 0  # default: 3
+ndvi_mean_threshold: 0.001 # default: 0.05, very conservative, but should be safest for most cases
+ndvi_var_threshold: 0.5 # default: 0.1
 
 # Stiching & Cleaning parameters
 iou_threshold: 0.6  # default: 0.5
