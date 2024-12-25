@@ -37,8 +37,6 @@ def postprocess_files(config):
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
                                config['height_data_path'],
                                config['image_directory'],
-                               confidence_threshold=config['confidence_threshold'],
-                               containment_threshold=config['containment_threshold'],
                                parallel=False,
                                filename_pattern=filename_pattern)
 
@@ -350,5 +348,5 @@ if __name__ == "__main__":
     # Start reading the files and validate the configuration
 
     # Start the processing
-    process_files(config_obj)
+    process_files(config)
     #profile_code(config)
