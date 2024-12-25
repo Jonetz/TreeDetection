@@ -8,6 +8,19 @@ from datetime import datetime
 from detectron2.config import get_cfg
 from detectron2 import model_zoo
 
+class Config:
+    _instance = None
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super(Config, cls).__new__(cls)
+            cls._instance.state = {}
+        return cls._instance
+
+    def _load_into_config(cls, config):
+        for key, value in config.items():
+            setattr(cls, key, value)
+
 def setup_model_cfg(base_model="COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml", update_model=None, device="cpu"):
     """Set up config object for inference-only.
     
@@ -151,4 +164,7 @@ def get_config(config_path: str):
     config["keep_intermediate"] = config.get("keep_intermediate", False)
     config["simplify_tolerance"] = config.get("simplify_tolerance", 0.2)
 
-    return config
+    config_obj = Config()
+    config_obj._load_into_config(config)
+
+    return config, config_obj

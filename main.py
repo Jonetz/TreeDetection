@@ -35,8 +35,9 @@ def postprocess_files(config):
 
     # 2. Filter with post-processing rules
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
-                               config['height_data_path'], config['image_directory'], confidence_threshold=config['confidence_threshold'],
-                               containment_threshold=config['containment_threshold'], parallel=False,
+                               config['height_data_path'],
+                               config['image_directory'],
+                               parallel=False,
                                filename_pattern=filename_pattern)
 
     # 4. Save the final predictions as gpkg in another folder
@@ -340,7 +341,7 @@ def profile_code(config, threshold=0.05):
 
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn', force=True)
-    config = get_config("config.yml")
+    config, config_obj = get_config("config.yml")
 
     # Print Information about the configuration
 
