@@ -11,9 +11,9 @@ from detectron2 import model_zoo
 class Config:
     _instance = None
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls):
         if not cls._instance:
-            cls._instance = super(Config, cls).__new__(cls, *args, **kwargs)
+            cls._instance = super(Config, cls).__new__(cls)
             cls._instance.state = {}
         return cls._instance
 
@@ -164,7 +164,7 @@ def get_config(config_path: str):
     config["keep_intermediate"] = config.get("keep_intermediate", False)
     config["simplify_tolerance"] = config.get("simplify_tolerance", 0.2)
 
-    config_obj = Config(config)
+    config_obj = Config()
     config_obj._load_into_config(config)
 
     return config, config_obj

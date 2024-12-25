@@ -27,7 +27,7 @@ import numpy as np
 import cupy as cp
 import torch
 
-from config import get_config
+from config import get_config, Config
 from helpers import ndvi_array_from_rgbi
 
 
@@ -456,13 +456,12 @@ def round_coordinates(polygon, decimals=3):
     except:
         return [[[coord for coord in point] for point in ring] for ring in polygon]
 
-def process_containment_features(features, polygon_ids, polygon_bounds, containment_threshold=0.6):
+def process_containment_features(features, polygon_ids, polygon_bounds, containment_threshold):
     """
     Efficiently process features to calculate polygon containment using GPU, excluding self-containment.
 
     Args:
         features (list): List of features with GeoJSON-like format.
-        containment_threshold (float): Percentage of bounding box overlap to determine containment.
 
     Returns:
         list: Updated features with 'is_contained' and 'num_contained' properties added.
@@ -525,9 +524,9 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
     return updated_features
 
 
-def process_features(features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, width, height, height_bounds, ndvi_bounds):
+def process_features(features, polygon_dict, id_to_area, height_data, height_transform, ndvi_data, ndvi_transform, width, height, height_bounds, ndvi_bounds):
     # TODO: pass config everywhere and just take what's needed
-    config = get_config("config.yml")
+    config = Config()
 
     polygon_x_all = []
     polygon_y_all = []
@@ -609,7 +608,7 @@ def process_features(features, polygon_dict, id_to_area, containment_threshold, 
     
     # Call process_containment_features and retrieve attributes
     polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
-    containment_results = process_containment_features(features, ids_all, polygon_bounds, containment_threshold)
+    containment_results = process_containment_features(features, ids_all, polygon_bounds, config.containment_threshold)
 
     # Extract containment results
     containment_info = {feature['properties']['poly_id']: {'is_contained': feature['properties']['is_contained'],
@@ -722,7 +721,7 @@ def get_centroid_gpu(polygon_x_gpu, polygon_y_gpu):
     y_mean = cp.mean(polygon_y_gpu)
     return cp.array([x_mean, y_mean])
 
-def process_geojson(data, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path, area_threshold=3):
+def process_geojson(data, confidence_threshold, containment_threshold, iou_threshold, area_threshold, height_data_path, rgbi_data_path):
     """
     Process a GeoJSON object to update features with additional properties based on containment and height data.
 
@@ -789,16 +788,12 @@ def process_geojson(data, confidence_threshold, containment_threshold, height_da
         ndvi_transform = src.transform
         ndvi_bounds = src.bounds
 
-    # TODO Make this config parameters
-    iou_threshold = 0.7
-    area_threshold = 0.5
-
     # 3. Apply filtering to keep only selected polygons
     retained_ids = filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores, iou_threshold, area_threshold)
     filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
 
     # 4. Filter polygons more complex based on containment and calculate height data for each polygon
-    new_features = process_features(filtered_features, polygon_dict, id_to_area, containment_threshold, height_data, height_transform, ndvi_data, ndvi_transform, height_width_tif, height_height_tif, height_bounds, ndvi_bounds)
+    new_features = process_features(filtered_features, polygon_dict, id_to_area, height_data, height_transform, ndvi_data, ndvi_transform, height_width_tif, height_height_tif, height_bounds, ndvi_bounds)
     data['features'] = new_features
     return data
 
@@ -819,7 +814,7 @@ def order_properties(feature, schema_properties):
     return feature
 
 
-def process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path):
+def process_single_file(file_path, processed_file_path, height_data_path, rgbi_data_path):
     """
     Process a single GeoJSON file and save the results to a new file.
 
@@ -830,6 +825,8 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         containment_threshold (float): Threshold for polygon containment.
         height_data_path (str): Path to the raster file containing height data.
     """
+    config = Config()
+
     with fiona.open(file_path, 'r') as source:
         features = [to_dict(feature) for feature in source]
         schema = source.schema
@@ -839,7 +836,7 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
         "type": "FeatureCollection",
         "features": features
     }
-    processed_data = process_geojson(data, confidence_threshold, containment_threshold, height_data_path, rgbi_data_path)
+    processed_data = process_geojson(data, config.confidence_threshold, config.containment_threshold, config.iou_threshold, config.area_threshold, height_data_path, rgbi_data_path)
 
     new_schema = schema.copy()
     new_properties_schema = {
@@ -881,15 +878,13 @@ def process_single_file(file_path, processed_file_path, confidence_threshold, co
             dest.write(feature)
 
 
-def process_files_in_directory(directory, height_directory, image_directory, confidence_threshold, containment_threshold, parallel=True, filename_pattern=None):
+def process_files_in_directory(directory, height_directory, image_directory, parallel=True, filename_pattern=None):
     """
     Process all GeoJSON files in a directory and save the results.
 
     Args:
         directory (str): Directory containing GeoJSON files to process.
         height_directory (str): Directory containing corresponding height data files.
-        confidence_threshold (float): Minimum confidence score required to include a feature.
-        containment_threshold (float): Threshold for polygon containment.
         parallel (bool): Whether to process files in parallel (default is True).
     """
     geojson_files = [f for f in os.listdir(directory) if f.endswith('.gpkg')]
@@ -934,7 +929,7 @@ def process_files_in_directory(directory, height_directory, image_directory, con
 
             if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
-                process_single_file(file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path, image_file_path)
+                process_single_file(file_path, processed_file_path, height_file_path, image_file_path)
                 torch.cuda.empty_cache()
             else:
                 warnings.warn(
@@ -954,7 +949,7 @@ def process_files_in_directory(directory, height_directory, image_directory, con
 
                 if height_file_path and image_file_path:
                     processed_file_path = os.path.join(directory, f"processed_{filename}")
-                    futures.append(executor.submit(process_single_file, file_path, processed_file_path, confidence_threshold, containment_threshold, height_file_path, image_file_path))
+                    futures.append(executor.submit(process_single_file, file_path, processed_file_path, height_file_path, image_file_path))
                 else:
                     warnings.warn(
                         f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
@@ -972,15 +967,12 @@ def profile_code():
     import pstats
     import io
     pr = cProfile.Profile()
-    
-    CONFIDENCE_THRESHOLD = 0.3
-    CONTAINMENT_THRESHOLD = 0.6
 
     geojson_directory = '/output/geojson_predictions'
     height_directory = '/data/nDSM_anno'
 
     pr.enable()
-    process_files_in_directory(geojson_directory, height_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD, parallel=True, filename_pattern=("FDOP20_(\\d+)_(\\d+)_rgbi\\.tif","nDSM_(\\d+)_1km\\.tif"))
+    process_files_in_directory(geojson_directory, height_directory, parallel=True, filename_pattern=("FDOP20_(\\d+)_(\\d+)_rgbi\\.tif","nDSM_(\\d+)_1km\\.tif"))
 
     pr.disable()
 
@@ -995,12 +987,10 @@ def profile_code():
 if __name__ == "__main__":
     profile_code()
     exit()
-    CONFIDENCE_THRESHOLD = 0.3
-    CONTAINMENT_THRESHOLD = 0.9
 
     geojson_directory = 'output/geojson_predictions'
     height_dir = 'data/nDSM'
     image_directory = 'data/rgb'
 
-    process_files_in_directory(geojson_directory, height_dir, image_directory, CONFIDENCE_THRESHOLD, CONTAINMENT_THRESHOLD,
+    process_files_in_directory(geojson_directory, height_dir, image_directory,
                                parallel=False)
