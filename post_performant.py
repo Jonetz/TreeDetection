@@ -625,10 +625,10 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
 
     for i, feature in enumerate(features):
         #TODO Delete this if implemented above (to account for lazy computation)
-        if heights[i] < config['height_threshold']:
+        if heights[i] < config.height_threshold:
             # Height is too small, discard it
             continue
-        if mean_ndvi[i] < config['ndvi_mean_threshold'] or var_ndvi[i] > config['ndvi_var_threshold']:
+        if mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold:
             continue
         
         polygon_id = feature['properties']['poly_id']
