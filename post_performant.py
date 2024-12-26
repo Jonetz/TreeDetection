@@ -17,6 +17,7 @@ import numba
 import shapely
 from rasterio._base import Affine
 from rasterio.coords import BoundingBox
+from rasterio.enums import Resampling
 from shapely.geometry import shape, Point
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
@@ -462,6 +463,7 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
 
     Args:
         features (list): List of features with GeoJSON-like format.
+        containment_threshold (float): Percentage of bounding box overlap to determine containment.
 
     Returns:
         list: Updated features with 'is_contained' and 'num_contained' properties added.
@@ -734,6 +736,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
     Returns:
         dict: Updated GeoJSON object with additional properties.
     """
+    config = Config()
     features = data['features']
 
     # 1. Filter features based on confidence score
@@ -776,16 +779,26 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
     confidence_scores = {feature['properties']['poly_id']: feature['properties']['Confidence_score'] for feature in filtered_features}
 
     # Continue with remaining processing steps
+    height_scaling_factor = config.height_scaling_factor
     with rasterio.open(height_data_path) as src:
-        height_data = src.read(1)
-        height_transform = src.transform
+        height_data = src.read(
+            1,
+            out_shape=(1, int(src.height * height_scaling_factor), int(src.width * height_scaling_factor)),
+            resampling=Resampling.bilinear
+        )
+        height_transform = src.transform * src.transform.scale((src.width / height_data.shape[-1]),
+                                                             (src.height / height_data.shape[-2]))
         height_width_tif, height_height_tif = src.width, src.height
         height_bounds = src.bounds
 
+    ndvi_scaling_factor = config.ndvi_scaling_factor
     with rasterio.open(rgbi_data_path) as src:
-        rgbi_data = src.read()
+        rgbi_data = src.read(
+            out_shape=(src.count, int(src.height * ndvi_scaling_factor), int(src.width * ndvi_scaling_factor)),
+            resampling=Resampling.bilinear
+        )
         ndvi_data = ndvi_array_from_rgbi(rgbi_data)
-        ndvi_transform = src.transform
+        ndvi_transform = src.transform * src.transform.scale((src.width / ndvi_data.shape[-1]), (src.height / ndvi_data.shape[-2]))
         ndvi_bounds = src.bounds
 
     # 3. Apply filtering to keep only selected polygons
