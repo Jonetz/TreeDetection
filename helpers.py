@@ -18,6 +18,7 @@ from pathlib import Path
 import rasterio
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
+from rasterio.coords import BoundingBox
 from rasterio.transform import xy
 from rasterio.crs import CRS
 from shapely.geometry import box, shape, Polygon
@@ -852,6 +853,13 @@ def delete_contents(out_dir, logger=None):
                 else:
                     print(f"Failed to delete {file_path}: {e}")
 
+def check_similarity_bounds(bounds1: BoundingBox, bounds2: BoundingBox, tolerance=1e-3):
+    left = abs(bounds1.left - bounds2.left) < tolerance
+    right = abs(bounds1.right - bounds2.right) < tolerance
+    top = abs(bounds1.top - bounds2.top) < tolerance
+    bottom = abs(bounds1.bottom - bounds2.bottom) < tolerance
+    return left and right and top and bottom
+
 @nb.njit(fastmath=True)
 def ndvi_index(red_value, nir_value):
     """
@@ -972,3 +980,4 @@ def plot_ndvi_values(values_array: np.ndarray):
     plt.axis('off')  # Turn off axes for visualization
     plt.savefig("viridis_image_high_res.png", dpi=dpi, bbox_inches='tight', pad_inches=0)
     plt.show()
+

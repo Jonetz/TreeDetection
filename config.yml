@@ -21,8 +21,8 @@ batch_size: 10
 exclude_files:  # default: []
   - "data/BW-Gewaesser/Gewaesserflaechen.shp"
 
-ndvi_scaling_factor: 0.2
-height_scaling_factor: 1.0
+ndvi_scaling_factor: 0.2 # default: 0.2, as the NDVI is 5x larger than the Height data array. We want both to be the same scale so that we can process them together.
+height_scaling_factor: 1.0 # default 1.0
 
 confidence_threshold: 0.3  # default: 0.3 
 containment_threshold: 0.6  # default: 0.9
