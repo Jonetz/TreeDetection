@@ -659,52 +659,57 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
 def process_features(features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds):
     config = Config()
 
-    polygon_x_all = []
-    polygon_y_all = []
-    ids_all = []
+    def preprocess_features(features):
+        polygon_x_all = []
+        polygon_y_all = []
+        ids_all = []
 
-    # Collect all polygons' coordinates and IDs for batch processing
-    max_points = 0  # Track the maximum number of points in any polygon
-    polygon_bounds = []
-    for feature in features:
-        polygon = shape(feature['geometry'])
+        # Collect all polygons' coordinates and IDs for batch processing
+        max_points = 0  # Track the maximum number of points in any polygon
+        polygon_bounds = []
+        for feature in features:
+            polygon = shape(feature['geometry'])
 
-        # If the polygon is a MultiPolygon, merge it into a single Polygon
-        if isinstance(polygon, MultiPolygon):
-            polygon = list(polygon.geoms)[0]
-        if isinstance(polygon, Polygon):
-            # Handle single Polygon
-            polygon_x, polygon_y = polygon.exterior.xy
-            polygon_x_all.append(polygon_x)
-            polygon_y_all.append(polygon_y)
-        else:
-            print(f'Other type than polygon encountered: {type(polygon)}')
-        polygon_bounds.append(polygon.bounds)
-        ids_all.append(feature['properties']['poly_id'])
-        max_points = max(max_points, len(polygon_x))  # Update max_points
+            # If the polygon is a MultiPolygon, merge it into a single Polygon
+            if isinstance(polygon, MultiPolygon):
+                polygon = list(polygon.geoms)[0]
+            if isinstance(polygon, Polygon):
+                # Handle single Polygon
+                polygon_x, polygon_y = polygon.exterior.xy
+                polygon_x_all.append(polygon_x)
+                polygon_y_all.append(polygon_y)
+            else:
+                print(f'Other type than polygon encountered: {type(polygon)}')
+            polygon_bounds.append(polygon.bounds)
+            ids_all.append(feature['properties']['poly_id'])
+            max_points = max(max_points, len(polygon_x))  # Update max_points
 
-        def pad_polygon_coords(polygon_coords_all, max_length):
-            """
-            Pads a batch of polygons with NaN values to ensure all have the same length.
+        return polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds
 
-            Args:
-                polygon_coords_all (list of cupy.ndarray): List of 1D arrays of polygon coordinates.
-                max_length (int): The maximum length to which each polygon is padded.
+    def pad_polygon_coords(polygon_coords_all, max_length):
+                """
+                Pads a batch of polygons with NaN values to ensure all have the same length.
 
-            Returns:
-                cupy.ndarray: 2D array where each row represents a padded polygon.
-            """
-            # Calculate the batch size
-            batch_size = len(polygon_coords_all)
+                Args:
+                    polygon_coords_all (list of cupy.ndarray): List of 1D arrays of polygon coordinates.
+                    max_length (int): The maximum length to which each polygon is padded.
 
-            # Create an empty array filled with NaN of shape (batch_size, max_length)
-            padded_array = cp.full((batch_size, max_length), cp.nan)
+                Returns:
+                    cupy.ndarray: 2D array where each row represents a padded polygon.
+                """
+                # Calculate the batch size
+                batch_size = len(polygon_coords_all)
 
-            # Fill the padded array with the polygon coordinates
-            for i, coords in enumerate(polygon_coords_all):
-                padded_array[i, :len(coords)] = cp.array(coords)
+                # Create an empty array filled with NaN of shape (batch_size, max_length)
+                padded_array = cp.full((batch_size, max_length), cp.nan)
 
-            return padded_array
+                # Fill the padded array with the polygon coordinates
+                for i, coords in enumerate(polygon_coords_all):
+                    padded_array[i, :len(coords)] = cp.array(coords)
+
+                return padded_array
+
+    polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds = preprocess_features(features)
 
     # Now use this function to pad the coordinates
     polygon_x_all_padded = pad_polygon_coords(polygon_x_all, max_points)
@@ -727,6 +732,8 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
         min_ndvi, max_ndvi, mean_ndvi, var_ndvi = ndvi_values
         heights, highest_points = height_values
 
+        # TODO: Kick out all polygons with height < threshold
+        # TODO Kick out all polygons with mean_ndvi < threshold or var_ndvi > threshold
     else:
         # Perform height data lookups for all polygons at once on the GPU
         print("Process NDVI and Height information separately.")
@@ -745,7 +752,18 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
                                                                         ndvi_bounds)
 
         # TODO Kick out all polygons with mean_ndvi < threshold or var_ndvi > threshold
-    
+
+    preselected_features = []
+    for i, feature in enumerate(features):
+        if heights[i] < config.height_threshold:
+            # Height is too small, discard it
+            continue
+        if mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold:
+            continue
+        preselected_features.append(feature)
+
+    polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds = preprocess_features(preselected_features)
+
     # Call process_containment_features and retrieve attributes
     polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
     containment_results = process_containment_features(features, ids_all, polygon_bounds, config.containment_threshold)
@@ -763,13 +781,14 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     # Step to further select the polygons based on containment results
     selected_features = []
 
-    for i, feature in enumerate(features):
+    for i, feature in enumerate(preselected_features):
         #TODO Delete this if implemented above (to account for lazy computation)
-        if heights[i] < config.height_threshold:
-            # Height is too small, discard it
-            continue
-        if mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold:
-            continue
+
+        # if heights[i] < config.height_threshold:
+        #     # Height is too small, discard it
+        #     continue
+        # if mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold:
+        #     continue
         
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
