@@ -188,7 +188,35 @@ def predict_tiles(config):
 
 
     elif config["combined_model"] and os.path.exists(config["combined_model"]):
-        pass
+        logger.info("Only Combined Model is given. Starting prediction...")
+
+        folder = os.path.join(config["output_directory"], "geojson")
+        # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
+        logger.info(f'Starting prediction with model {config["combined_model"]}...')
+        start = time.time()
+        predict_on_model(config, config["combined_model"], config["tiles_path"],
+                         os.path.join(config["output_directory"], "predictions"), batch_size=config["batch_size"])
+        end = time.time()
+        predict_on_model_duration = end - start
+
+        # Process and stitch predictions for the urban model
+        start = time.time()
+        process_and_stitch_predictions(
+            tiles_path=config["tiles_path"],
+            pred_fold=os.path.join(config["output_directory"], "predictions"),
+            output_path=folder,
+            max_workers=config["num_workers"],
+            shift=1,
+            simplify_tolerance=config['simplify_tolerance'],
+            logger=config["logger"]
+        )
+        end = time.time()
+        process_and_stitch_predictions_duration = end - start
+
+        logger.info("Predictions have been processed and stitched. Begin fusing the predictions.")
+
+        logger.debug(f"Prediction took {predict_on_model_duration} seconds")
+        logger.debug(f"process and stitch predictions for urban took {process_and_stitch_predictions_duration} seconds")
     else:
         raise FileNotFoundError(
             "No model available for prediction. Either urban model or forrest model + outline or combined model must be available.")
