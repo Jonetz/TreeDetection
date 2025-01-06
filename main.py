@@ -112,7 +112,8 @@ def predict_tiles(config):
     logger = config["logger"]
 
     # 1. If urban model is available, predict the tiles using the urban model
-    if config["urban_model"] and os.path.exists(config["urban_model"]) and \
+    if "urban_model" in config and "forrest_model" in config and "forrest_outline" in config and\
+            config["urban_model"] and os.path.exists(config["urban_model"]) and \
             config["forrest_model"] and os.path.exists(config["forrest_model"]) and \
             config["forrest_outline"] and os.path.exists(config["forrest_outline"]):
         logger.info("Urban, forrest models and forrest outline are available. Starting prediction...")
@@ -187,7 +188,7 @@ def predict_tiles(config):
         logger.debug(f"fuse prediction took {fuse_predictions_duration} seconds")
 
 
-    elif config["combined_model"] and os.path.exists(config["combined_model"]):
+    elif "combined_model" in config and config["combined_model"] and os.path.exists(config["combined_model"]):
         logger.info("Only Combined Model is given. Starting prediction...")
 
         folder = os.path.join(config["output_directory"], "geojson")
@@ -369,7 +370,7 @@ def profile_code(config, threshold=0.05):
 
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn', force=True)
-    config, config_obj = get_config("config.yml")
+    config = get_config("config.yml")
 
     # Print Information about the configuration
 
