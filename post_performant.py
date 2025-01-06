@@ -17,6 +17,7 @@ import numba
 import shapely
 from rasterio._base import Affine
 from rasterio.coords import BoundingBox
+from rasterio.enums import Resampling
 from shapely.geometry import shape, Point
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
@@ -28,7 +29,7 @@ import cupy as cp
 import torch
 
 from config import get_config, Config
-from helpers import ndvi_array_from_rgbi
+from helpers import ndvi_array_from_rgbi, check_similarity_bounds
 
 
 def convert_to_python_types(data):
@@ -325,6 +326,136 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
 
     return min_ndvi_values, max_ndvi_values, mean_ndvi_values, var_ndvi_values
 
+def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_data: np.ndarray, height_data: np.ndarray,
+                            transform: np.ndarray, width: int, height: int, bounds: BoundingBox):
+    """
+        Find the minimum, maximum, and mean NDVI values within a polygon from raster NDVI data.
+
+        Args:
+            polygon (shapely.geometry.Polygon): Polygon defining the area of interest.
+            ndvi_data (numpy.ndarray): 2D array of NDVI data from the raster.
+            transform (Affine): Transformation matrix for geo to raster / raster to geo coordinates.
+            width (int): Width of the raster in pixels.
+            height (int): Height of the raster in pixels.
+            bounds (BoundingBox): Bounds of the raster.
+
+        Returns:
+            tuple: (min_ndvi, max_ndvi, mean_ndvi)
+                - min_ndvi (float): Minimum NDVI value within the polygon.
+                - max_ndvi (float): Maximum NDVI value within the polygon.
+                - mean_ndvi (float): Mean NDVI value within the polygon.
+    """
+    # Unpack bounds
+    minx, miny, maxx, maxy = bounds
+
+    # Determine raster coordinates for bounding box
+    min_col, min_row = geo_to_raster(transform, minx, miny)
+    max_col, max_row = geo_to_raster(transform, maxx, maxy)
+
+    # Clamp values within valid raster bounds
+    min_row, max_row = sorted([min(min_row, height - 1), max(max_row, 0)])
+    min_col, max_col = sorted([min(min_col, width - 1), max(max_col, 0)])
+
+    # Extract ndvi & height data subset based on bounding box
+    ndvi_subset = ndvi_data[min_row:max_row + 1, min_col:max_col + 1]
+    height_subset = height_data[min_row:max_row + 1, min_col:max_col + 1]
+
+    if ndvi_subset.size == 0:
+        print("Error: The subset of height data is empty.")
+        return -1, None
+
+    # Prepare points (x, y) for batch processing
+    rows, cols = np.meshgrid(np.arange(ndvi_subset.shape[0]), np.arange(ndvi_subset.shape[1]), indexing='ij')
+    rows, cols = rows.flatten(), cols.flatten()
+
+    # Convert to geo-coordinates for all points
+    x_coords, y_coords = raster_to_geo(transform, rows + min_row, cols + min_col)
+
+    # Convert x_coords and y_coords to CuPy arrays for GPU processing
+    x_coords_gpu, y_coords_gpu = cp.array(x_coords, dtype=cp.float32), cp.array(y_coords, dtype=cp.float32)
+
+    # Prepare arrays for results
+    num_polygons = polygon_x.shape[0]
+
+    min_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    max_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    mean_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+    var_ndvi_values = cp.zeros(num_polygons, dtype=cp.float32)
+
+    max_heights = cp.zeros(num_polygons, dtype=cp.float32)
+    max_coordinates = cp.zeros((num_polygons, 2), dtype=cp.float32)
+
+    centers = cp.zeros((num_polygons, 2), dtype=cp.float32)
+
+    for i in range(num_polygons):
+        # Get current polygon coordinates
+        polygon_x_i, polygon_y_i = polygon_x[i], polygon_y[i]
+
+        valid_mask = ~cp.isnan(polygon_x_i) & ~cp.isnan(polygon_y_i)  # Mask to remove NaNs
+        valid_x = polygon_x_i[valid_mask]
+        valid_y = polygon_y_i[valid_mask]
+
+        # Compute the center of the bounding box for the polygon (after filtering NaNs)
+        min_x, max_x = valid_x.min(), valid_x.max()
+        min_y, max_y = valid_y.min(), valid_y.max()
+
+        center_x = (min_x + max_x) / 2
+        center_y = (min_y + max_y) / 2
+        centers[i] = cp.array([center_x, center_y])
+
+        scaling_factor = 0.5
+        # Compute the radius of the bounding box for the polygon
+        radius = ((max_x - min_x) + (max_y - min_y) / 4)
+
+        # Check if points are inside the polygon using a vectorized function
+        inside_mask = is_point_in_polygon_batch(center_x, center_y, radius * scaling_factor, x_coords_gpu, y_coords_gpu, )
+
+        # Extract ndvi values where points are inside the polygon
+        inside_ndvi = ndvi_subset.flatten()[inside_mask]
+
+        # Check if points are inside the polygon using a vectorized function
+        inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu,
+                                                y_coords_gpu, )
+
+        # Extract height values where points are inside the polygon
+        inside_heights = height_subset.flatten()[inside_mask]
+
+        inside_coords = np.column_stack([x_coords_gpu[inside_mask], y_coords_gpu[inside_mask]])
+
+        if inside_ndvi.shape[0] == 0:
+            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
+            min_ndvi_values[i] = -1
+            max_ndvi_values[i] = -1
+            mean_ndvi_values[i] = -1
+            var_ndvi_values[i] = -1
+        else:
+            mean_ndvi = cp.mean(inside_ndvi)
+            var_ndvi = cp.var(inside_ndvi)
+
+            # Handle empty result (fallback to centroid)
+            min_index = cp.argmin(inside_ndvi)
+            max_index = cp.argmax(inside_ndvi)
+
+            min_ndvi_values[i] = inside_ndvi[min_index]
+            max_ndvi_values[i] = inside_ndvi[max_index]
+            mean_ndvi_values[i] = mean_ndvi
+            var_ndvi_values[i] = var_ndvi
+
+        if inside_heights.size == 0:
+            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
+            max_coordinates[i] = cp.array([-1, -1])
+            max_heights[i] = -1  # Placeholder value, can be adjusted
+        else:
+            # Find the maximum height and its coordinates
+            max_index = cp.argmax(inside_heights)
+            max_heights[i] = inside_heights[max_index]
+            max_coordinates[i] = inside_coords[max_index]
+
+    height_values = [max_heights, max_coordinates]
+    ndvi_values = [min_ndvi_values, max_ndvi_values, mean_ndvi_values, var_ndvi_values]
+    return height_values, ndvi_values
+
+
 def calculate_iou(batch_boxes1, batch_boxes2):
     # Ensure batch_boxes1 and batch_boxes2 are 2D arrays with shape [N, 4]
     batch_boxes1 = cp.array(batch_boxes1).reshape(-1, 4)
@@ -462,6 +593,7 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
 
     Args:
         features (list): List of features with GeoJSON-like format.
+        containment_threshold (float): Percentage of bounding box overlap to determine containment.
 
     Returns:
         list: Updated features with 'is_contained' and 'num_contained' properties added.
@@ -524,8 +656,7 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
     return updated_features
 
 
-def process_features(features, polygon_dict, id_to_area, height_data, height_transform, ndvi_data, ndvi_transform, width, height, height_bounds, ndvi_bounds):
-    # TODO: pass config everywhere and just take what's needed
+def process_features(features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds):
     config = Config()
 
     polygon_x_all = []
@@ -589,22 +720,31 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     # Compute centroids for all polygons on GPU (using the batch processing function)
     centroids = get_centroids(polygon_x_gpu, polygon_y_gpu)
 
-    # Perform height data lookups for all polygons at once on the GPU
-    heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, width,
-                                                        height, height_bounds)
-    
-    # TODO: Kick out all polygons with height < threshold
-    
-    # Perform NDVI data lookups for all polygons at once on the GPU, similar to height data lookup
-    min_ndvi, max_ndvi, mean_ndvi, var_ndvi = get_ndvi_within_polygon(polygon_x_gpu,
-                                                                    polygon_y_gpu,
-                                                                    ndvi_data_gpu,
-                                                                    ndvi_transform,
-                                                                    ndvi_data.shape[0],
-                                                                    ndvi_data.shape[1],
-                                                                    ndvi_bounds)
-    
-    # TODO Kick out all polygons with mean_ndvi < threshold or var_ndvi > threshold
+    if height_transform.almost_equals(ndvi_transform) and check_similarity_bounds(height_bounds, ndvi_bounds):
+        print("Process NDVI and Height information together.")
+        height_values, ndvi_values = get_metadata_within_polygon(polygon_x_gpu, polygon_y_gpu, ndvi_data_gpu, height_data_gpu, ndvi_transform, height_data.shape[0], height_data.shape[1], ndvi_bounds)
+
+        min_ndvi, max_ndvi, mean_ndvi, var_ndvi = ndvi_values
+        heights, highest_points = height_values
+
+    else:
+        # Perform height data lookups for all polygons at once on the GPU
+        print("Process NDVI and Height information separately.")
+        heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, height_data.shape[0],
+                                                                        height_data.shape[1], height_bounds)
+
+        # TODO: Kick out all polygons with height < threshold
+
+        # Perform NDVI data lookups for all polygons at once on the GPU, similar to height data lookup
+        min_ndvi, max_ndvi, mean_ndvi, var_ndvi = get_ndvi_within_polygon(polygon_x_gpu,
+                                                                        polygon_y_gpu,
+                                                                        ndvi_data_gpu,
+                                                                        ndvi_transform,
+                                                                        ndvi_data.shape[0],
+                                                                        ndvi_data.shape[1],
+                                                                        ndvi_bounds)
+
+        # TODO Kick out all polygons with mean_ndvi < threshold or var_ndvi > threshold
     
     # Call process_containment_features and retrieve attributes
     polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
@@ -734,6 +874,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
     Returns:
         dict: Updated GeoJSON object with additional properties.
     """
+    config = Config()
     features = data['features']
 
     # 1. Filter features based on confidence score
@@ -776,16 +917,26 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
     confidence_scores = {feature['properties']['poly_id']: feature['properties']['Confidence_score'] for feature in filtered_features}
 
     # Continue with remaining processing steps
+    height_scaling_factor = config.height_scaling_factor
     with rasterio.open(height_data_path) as src:
-        height_data = src.read(1)
-        height_transform = src.transform
+        height_data = src.read(
+            1,
+            out_shape=(1, int(src.height * height_scaling_factor), int(src.width * height_scaling_factor)),
+            resampling=Resampling.bilinear
+        )
+        height_transform = src.transform * src.transform.scale((src.width / height_data.shape[-1]),
+                                                             (src.height / height_data.shape[-2]))
         height_width_tif, height_height_tif = src.width, src.height
         height_bounds = src.bounds
 
+    ndvi_scaling_factor = config.ndvi_scaling_factor
     with rasterio.open(rgbi_data_path) as src:
-        rgbi_data = src.read()
+        rgbi_data = src.read(
+            out_shape=(src.count, int(src.height * ndvi_scaling_factor), int(src.width * ndvi_scaling_factor)),
+            resampling=Resampling.bilinear
+        )
         ndvi_data = ndvi_array_from_rgbi(rgbi_data)
-        ndvi_transform = src.transform
+        ndvi_transform = src.transform * src.transform.scale((src.width / ndvi_data.shape[-1]), (src.height / ndvi_data.shape[-2]))
         ndvi_bounds = src.bounds
 
     # 3. Apply filtering to keep only selected polygons
@@ -793,7 +944,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
     filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
 
     # 4. Filter polygons more complex based on containment and calculate height data for each polygon
-    new_features = process_features(filtered_features, polygon_dict, id_to_area, height_data, height_transform, ndvi_data, ndvi_transform, height_width_tif, height_height_tif, height_bounds, ndvi_bounds)
+    new_features = process_features(filtered_features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds)
     data['features'] = new_features
     return data
 
