@@ -731,16 +731,11 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
 
         min_ndvi, max_ndvi, mean_ndvi, var_ndvi = ndvi_values
         heights, highest_points = height_values
-
-        # TODO: Kick out all polygons with height < threshold
-        # TODO Kick out all polygons with mean_ndvi < threshold or var_ndvi > threshold
     else:
         # Perform height data lookups for all polygons at once on the GPU
         print("Process NDVI and Height information separately.")
         heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, height_data.shape[0],
                                                                         height_data.shape[1], height_bounds)
-
-        # TODO: Kick out all polygons with height < threshold
 
         # Perform NDVI data lookups for all polygons at once on the GPU, similar to height data lookup
         min_ndvi, max_ndvi, mean_ndvi, var_ndvi = get_ndvi_within_polygon(polygon_x_gpu,
@@ -751,8 +746,7 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
                                                                         ndvi_data.shape[1],
                                                                         ndvi_bounds)
 
-        # TODO Kick out all polygons with mean_ndvi < threshold or var_ndvi > threshold
-
+    # Preselect features based on the heights and NDVI values to speed up containment processing
     preselected_features = []
     for i, feature in enumerate(features):
         if heights[i] < config.height_threshold:
@@ -782,14 +776,6 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     selected_features = []
 
     for i, feature in enumerate(preselected_features):
-        #TODO Delete this if implemented above (to account for lazy computation)
-
-        # if heights[i] < config.height_threshold:
-        #     # Height is too small, discard it
-        #     continue
-        # if mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold:
-        #     continue
-        
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
 
