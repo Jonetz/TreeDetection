@@ -994,7 +994,7 @@ def plot_ndvi_values(values_array: np.ndarray):
     plt.show()
 
 
-def retrieve_neighboring_image_filenames(filename):
+def retrieve_neighboring_image_filenames(filename, other_filenames):
     x_coord, y_coord = filename_geoinfo(filename)
 
     parts = os.path.basename(filename).replace(".tif", "").split("_")
@@ -1004,29 +1004,28 @@ def retrieve_neighboring_image_filenames(filename):
     image_filename_up = f"{parts[0]}_{x_coord}_{y_coord + 1}.tif"
     image_filename_down = f"{parts[0]}_{x_coord}_{y_coord - 1}.tif"
 
-    directory = os.path.dirname(filename)
-    left_exists = os.path.exists(f"{directory}/{image_filename_left}")
-    right_exists = os.path.exists(f"{directory}/{image_filename_right}")
-    up_exists = os.path.exists(f"{directory}/{image_filename_up}")
-    down_exists = os.path.exists(f"{directory}/{image_filename_down}")
+    left_exists = image_filename_left in other_filenames
+    right_exists = image_filename_right in other_filenames
+    up_exists = image_filename_up in other_filenames
+    down_exists = image_filename_down in other_filenames
 
     if left_exists:
-        left = f"{directory}/{image_filename_left}"
+        left = image_filename_left
     else:
         left = None
 
     if right_exists:
-        right = f"{directory}/{image_filename_right}"
+        right = image_filename_right
     else:
         right = None
 
     if up_exists:
-        up = f"{directory}/{image_filename_up}"
+        up = image_filename_up
     else:
         up = None
 
     if down_exists:
-        down = f"{directory}/{image_filename_down}"
+        down = image_filename_down
     else:
         down = None
 
@@ -1062,9 +1061,6 @@ def merge_images(filename1, filename2, output_filename):
         # Write the merged image to the output file
         with rasterio.open(output_filename, "w", **merged_meta) as dest:
             dest.write(merged_data)
-
-    with rasterio.open(output_filename) as output_filename:
-        print(output_filename.meta)
 
     print(f"Merged image saved to {output_filename}")
 
