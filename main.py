@@ -5,13 +5,18 @@ import sys
 import os
 import re
 import warnings
+
+import rasterio
+from rasterio.windows import Window
+
 from prediction import Predictor
 
 # Add the root project directory to the system path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import process_and_stitch_predictions, fuse_predictions, delete_contents
+from helpers import process_and_stitch_predictions, fuse_predictions, delete_contents, \
+    retrieve_neighboring_image_filenames, merge_images, filename_geoinfo, crop_image
 from post_performant import process_files_in_directory
 
 from concurrent.futures import ThreadPoolExecutor
@@ -278,6 +283,49 @@ def preprocess_files(config):
             # Smash all groups together without any separator
             height_data_identifiers["".join(match.groups())] = f
 
+    # Check if there is a neighboring image, where we have to create a intermediate image
+    # We also have to do this for the height data
+    # TODO: Implement this for height data
+    for f in images_paths:
+        # Here we first need to check if there is a neighboring image
+        # Then we need to create a merged image of the neighboring image and the current image and store it in a subfolder
+        # It is important to also do this with the height image
+
+        # We can do this by checking if there is a picture to the left_right_up_down of the current image and return it
+        # If there is an image bordering, we create an image with both
+
+        left, right, up, down = retrieve_neighboring_image_filenames(f)
+        # We always merge to the right and downwards, so we don't merge two images twice (we could look at the filenames and prevent it that way too)
+        if right is not None:
+            directory = os.path.dirname(f)
+            f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
+            f_x_coord, f_y_coord = filename_geoinfo(f)
+            right_x_coord, right_y_coord = filename_geoinfo(right)
+            right_merged_img = merge_images(f, right, f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{right_x_coord}_{right_y_coord}.tif")
+        if down is not None:
+            directory = os.path.dirname(f)
+            f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
+            f_x_coord, f_y_coord = filename_geoinfo(f)
+            down_x_coord, down_y_coord = filename_geoinfo(down)
+            down_merged_img = merge_images(f, down, f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{down_x_coord}_{down_y_coord}.tif")
+
+    # Now we need to go through the merged images and zoom into them
+    images_directory = config["image_directory"]
+    merged_directory = os.path.join(images_directory, config['merged_path'])
+    buffer_size = config["buffer"]
+    for images in os.listdir(str(merged_directory)):
+        # We want to determine where it is larger (height or width) and then crop it accordingly
+        if images.endswith(".tif"):
+            with rasterio.open(f"{merged_directory}/{images}") as src:
+                img_width, img_height = src.width, src.height
+
+            if img_width > img_height:
+                # We want to crop the image in the middle
+                crop_image(f"{merged_directory}/{images}", buffer_size * 10, img_height, f"{merged_directory}/cropped/{images}")
+            else:
+                crop_image(f"{merged_directory}/{images}", img_width, buffer_size * 10, f"{merged_directory}/cropped/{images}")
+
+
     # Validate height data availability
     missing_height_data = []
     for identifier, image_path in image_identifiers.items():
@@ -370,7 +418,7 @@ def profile_code(config, threshold=0.05):
 
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn', force=True)
-    config = get_config("config.yml")
+    config, config_obj = get_config("config.yml")
 
     # Print Information about the configuration
 

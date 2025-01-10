@@ -19,8 +19,10 @@ import rasterio
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
 from rasterio.coords import BoundingBox
+from rasterio.merge import merge
 from rasterio.transform import xy
 from rasterio.crs import CRS
+from rasterio.windows import Window
 from shapely.geometry import box, shape, Polygon
 from shapely.errors import ShapelyError
 
@@ -265,15 +267,25 @@ def filename_geoinfo(filename):
 
     Copied directly from detectree2 
     """
-    parts = os.path.basename(filename).replace(".geojson", "").replace(".json", "").replace(".gpkg", "").split("_")
+    if os.path.splitext(filename)[1] == ".tif":
+        parts = os.path.basename(filename).replace(".tif", "").split("_")
 
-    parts = [int(part) for part in parts[-5:]]  # type: ignore
-    minx = parts[0]
-    miny = parts[1]
-    width = parts[2]
-    buffer = parts[3]
-    crs = parts[4]
-    return (minx, miny, width, buffer, crs)
+        parts = [int(part) for part in parts[1:]]  # type: ignore
+
+        x_coord = parts[0]
+        y_coord = parts[1]
+
+        return (x_coord, y_coord)
+    else:
+        parts = os.path.basename(filename).replace(".geojson", "").replace(".json", "").replace(".gpkg", "").split("_")
+
+        parts = [int(part) for part in parts[-5:]]  # type: ignore
+        minx = parts[0]
+        miny = parts[1]
+        width = parts[2]
+        buffer = parts[3]
+        crs = parts[4]
+        return (minx, miny, width, buffer, crs)
 
 
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
@@ -981,3 +993,112 @@ def plot_ndvi_values(values_array: np.ndarray):
     plt.savefig("viridis_image_high_res.png", dpi=dpi, bbox_inches='tight', pad_inches=0)
     plt.show()
 
+
+def retrieve_neighboring_image_filenames(filename):
+    x_coord, y_coord = filename_geoinfo(filename)
+
+    parts = os.path.basename(filename).replace(".tif", "").split("_")
+
+    image_filename_left = f"{parts[0]}_{x_coord - 1}_{y_coord}.tif"
+    image_filename_right = f"{parts[0]}_{x_coord + 1}_{y_coord}.tif"
+    image_filename_up = f"{parts[0]}_{x_coord}_{y_coord + 1}.tif"
+    image_filename_down = f"{parts[0]}_{x_coord}_{y_coord - 1}.tif"
+
+    directory = os.path.dirname(filename)
+    left_exists = os.path.exists(f"{directory}/{image_filename_left}")
+    right_exists = os.path.exists(f"{directory}/{image_filename_right}")
+    up_exists = os.path.exists(f"{directory}/{image_filename_up}")
+    down_exists = os.path.exists(f"{directory}/{image_filename_down}")
+
+    if left_exists:
+        left = f"{directory}/{image_filename_left}"
+    else:
+        left = None
+
+    if right_exists:
+        right = f"{directory}/{image_filename_right}"
+    else:
+        right = None
+
+    if up_exists:
+        up = f"{directory}/{image_filename_up}"
+    else:
+        up = None
+
+    if down_exists:
+        down = f"{directory}/{image_filename_down}"
+    else:
+        down = None
+
+    return (left, right, up, down)
+
+
+def merge_images(filename1, filename2, output_filename):
+    # Open the input images
+    output_dir = os.path.dirname(output_filename)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)  # Create the directory on the fly
+
+    with rasterio.open(filename1) as src1, rasterio.open(filename2) as src2:
+        # Ensure the CRS (Coordinate Reference System) is the same
+        if src1.crs != src2.crs:
+            raise ValueError("CRS of the two images do not match.")
+
+        # Merge the images
+        merged_data, merged_transform = merge([src1, src2])
+
+        print(merged_data.shape)
+        # Update metadata for the merged image
+        merged_meta = src1.meta.copy()
+        merged_meta.update({
+            "driver": "GTiff",
+            "height": merged_data.shape[1],
+            "width": merged_data.shape[2],
+            "transform": merged_transform,
+        })
+
+        print(merged_meta)
+
+        # Write the merged image to the output file
+        with rasterio.open(output_filename, "w", **merged_meta) as dest:
+            dest.write(merged_data)
+
+    with rasterio.open(output_filename) as output_filename:
+        print(output_filename.meta)
+
+    print(f"Merged image saved to {output_filename}")
+
+
+def crop_image(filename, width, height, output_filename):
+    output_dir = os.path.dirname(output_filename)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)  # Create the directory on the fly
+    with rasterio.open(filename) as src:
+        # Get the image dimensions
+        img_width, img_height = src.width, src.height
+
+        # Compute the center of the image
+        center_x, center_y = img_width // 2, img_height // 2
+
+        # Calculate the bounds of the cropping window
+        window_left = max(center_x - width // 2, 0)
+        window_top = max(center_y - height // 2, 0)
+        window = Window(window_left, window_top, width, height)
+
+        # Read the cropped window
+        cropped_data = src.read(window=window)
+
+        # Update metadata for the cropped image
+        cropped_transform = src.window_transform(window)
+        cropped_meta = src.meta.copy()
+        cropped_meta.update({
+            "width": width,
+            "height": height,
+            "transform": cropped_transform
+        })
+
+        # Save the cropped image
+        with rasterio.open(output_filename, "w", **cropped_meta) as dest:
+            dest.write(cropped_data)
+
+    print(f"Cropped image saved to {output_filename}")
