@@ -348,10 +348,10 @@ def save_cropped_images(images_path, image_directory):
             stem = os.path.splitext(images)[0]
             if img_width > img_height:
                 # We want to crop the image in the middle
-                output_filename = crop_image(f"{merged_directory}/{images}", config["tile_width"] + 2 * config["buffer"], img_height,
+                output_filename = crop_image(f"{merged_directory}/{images}", (config["tile_width"] + 2 * config["buffer"])*3, img_height,
                            f"{directory}/{stem}.tif")
             else:
-                output_filename = crop_image(f"{merged_directory}/{images}", img_width, config["tile_height"] + 2 * config["buffer"],
+                output_filename = crop_image(f"{merged_directory}/{images}", img_width, (config["tile_height"] + 2 * config["buffer"])*3,
                            f"{directory}/{stem}.tif")
 
             cropped_image_names.append(output_filename)
