@@ -285,98 +285,12 @@ def preprocess_files(config):
 
     # Check if there is a neighboring image, where we have to create a intermediate image
     # We also have to do this for the height data
-    # TODO: Implement this for height data
-    uncropped_img = [path for path in images_paths if "cropped" not in path]
-    for f in uncropped_img:
-        # Here we first need to check if there is a neighboring image
-        # Then we need to create a merged image of the neighboring image and the current image and store it in a subfolder
-        # It is important to also do this with the height image
 
-        # We can do this by checking if there is a picture to the left_right_up_down of the current image and return it
-        # If there is an image bordering, we create an image with both
+    cropped_image_filenames = save_cropped_images(images_paths, config["image_directory"])
+    cropped_height_filenames = save_cropped_images(height_paths, config["height_data_path"])
 
-        uncropped_img_filenames = [os.path.basename(path) for path in uncropped_img]
-        left, right, up, down = retrieve_neighboring_image_filenames(f, uncropped_img_filenames)
-        # We always merge to the right and downwards, so we don't merge two images twice (we could look at the filenames and prevent it that way too)
-        if right is not None:
-            directory = os.path.dirname(f)
-            f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
-            f_x_coord, f_y_coord = filename_geoinfo(f)
-            right_x_coord, right_y_coord = filename_geoinfo(f"{directory}/{right}")
-            right_merged_img = merge_images(f, f"{directory}/{right}", f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{right_x_coord}_{right_y_coord}.tif")
-        if down is not None:
-            directory = os.path.dirname(f)
-            f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
-            f_x_coord, f_y_coord = filename_geoinfo(f)
-            down_x_coord, down_y_coord = filename_geoinfo(f"{directory}/{down}")
-            down_merged_img = merge_images(f, f"{directory}/{down}", f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{down_x_coord}_{down_y_coord}.tif")
-
-    directory = os.path.dirname(uncropped_img[0])
-    # Now we need to go through the merged images and zoom into them
-    images_directory = config["image_directory"]
-    merged_directory = os.path.join(images_directory, config['merged_path'])
-    buffer_size = config["buffer"]
-    for images in os.listdir(str(merged_directory)):
-        # We want to determine where it is larger (height or width) and then crop it accordingly
-        if images.endswith(".tif"):
-            with rasterio.open(f"{merged_directory}/{images}") as src:
-                img_width, img_height = src.width, src.height
-
-            stem = os.path.splitext(images)[0]
-            if img_width > img_height:
-                # We want to crop the image in the middle
-                crop_image(f"{merged_directory}/{images}", buffer_size * 10, img_height, f"{directory}/{stem}_cropped.tif")
-            else:
-                crop_image(f"{merged_directory}/{images}", img_width, buffer_size * 10, f"{directory}/{stem}_cropped.tif")
-
-    # TODO: after processing we should delete the "merged" folder
-
-    uncropped_img = [path for path in height_paths if "cropped" not in path]
-    for f in uncropped_img:
-        # Here we first need to check if there is a neighboring image
-        # Then we need to create a merged image of the neighboring image and the current image and store it in a subfolder
-        # It is important to also do this with the height image
-
-        # We can do this by checking if there is a picture to the left_right_up_down of the current image and return it
-        # If there is an image bordering, we create an image with both
-
-        uncropped_img_filenames = [os.path.basename(path) for path in uncropped_img]
-        left, right, up, down = retrieve_neighboring_image_filenames(f, uncropped_img_filenames)
-        # We always merge to the right and downwards, so we don't merge two images twice (we could look at the filenames and prevent it that way too)
-        if right is not None:
-            directory = os.path.dirname(f)
-            f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
-            f_x_coord, f_y_coord = filename_geoinfo(f)
-            right_x_coord, right_y_coord = filename_geoinfo(f"{directory}/{right}")
-            right_merged_img = merge_images(f, f"{directory}/{right}",
-                                            f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{right_x_coord}_{right_y_coord}.tif")
-        if down is not None:
-            directory = os.path.dirname(f)
-            f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
-            f_x_coord, f_y_coord = filename_geoinfo(f)
-            down_x_coord, down_y_coord = filename_geoinfo(f"{directory}/{down}")
-            down_merged_img = merge_images(f, f"{directory}/{down}",
-                                           f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{down_x_coord}_{down_y_coord}.tif")
-
-    directory = os.path.dirname(uncropped_img[0])
-    # Now we need to go through the merged images and zoom into them
-    images_directory = config["height_data_path"]
-    merged_directory = os.path.join(images_directory, config['merged_path'])
-    buffer_size = config["buffer"]
-    for images in os.listdir(str(merged_directory)):
-        # We want to determine where it is larger (height or width) and then crop it accordingly
-        if images.endswith(".tif"):
-            with rasterio.open(f"{merged_directory}/{images}") as src:
-                img_width, img_height = src.width, src.height
-
-            stem = os.path.splitext(images)[0]
-            if img_width > img_height:
-                # We want to crop the image in the middle
-                crop_image(f"{merged_directory}/{images}", buffer_size * 10, img_height,
-                           f"{directory}/{stem}_cropped.tif")
-            else:
-                crop_image(f"{merged_directory}/{images}", img_width, buffer_size * 10,
-                           f"{directory}/{stem}_cropped.tif")
+    images_paths.extend(cropped_image_filenames)
+    height_paths.extend(cropped_height_filenames)
 
     # Validate height data availability
     missing_height_data = []
@@ -399,6 +313,50 @@ def preprocess_files(config):
                       forest_shapefile=config.get("forrest_outline", None)))
 
     return images_paths
+
+
+def save_cropped_images(images_path, image_directory):
+    uncropped_img = [path for path in images_path if "__" not in path]
+    for f in uncropped_img:
+        uncropped_img_filenames = [os.path.basename(path) for path in uncropped_img]
+        left, right, up, down = retrieve_neighboring_image_filenames(f, uncropped_img_filenames)
+
+        directory = os.path.dirname(f)
+        f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
+        f_x_coord, f_y_coord = filename_geoinfo(f)
+        if right is not None:
+            right_x_coord, right_y_coord = filename_geoinfo(f"{directory}/{right}")
+            right_merged_img = merge_images(f, f"{directory}/{right}",
+                                            f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{right_x_coord}_{right_y_coord}__.tif")
+        if down is not None:
+            down_x_coord, down_y_coord = filename_geoinfo(f"{directory}/{down}")
+            down_merged_img = merge_images(f, f"{directory}/{down}",
+                                           f"{directory}/{config['merged_path']}/{f_basename}_{f_x_coord}_{f_y_coord}__{down_x_coord}_{down_y_coord}__.tif")
+
+    directory = os.path.dirname(uncropped_img[0])
+    # Now we need to go through the merged images and zoom into them
+    merged_directory = os.path.join(image_directory, config['merged_path'])
+
+
+    cropped_image_names = []
+    for images in os.listdir(str(merged_directory)):
+        # We want to determine where it is larger (height or width) and then crop it accordingly
+        if images.endswith(".tif"):
+            with rasterio.open(f"{merged_directory}/{images}") as src:
+                img_width, img_height = src.width, src.height
+
+            stem = os.path.splitext(images)[0]
+            if img_width > img_height:
+                # We want to crop the image in the middle
+                output_filename = crop_image(f"{merged_directory}/{images}", config["tile_width"] + 2 * config["buffer"], img_height,
+                           f"{directory}/{stem}.tif")
+            else:
+                output_filename = crop_image(f"{merged_directory}/{images}", img_width, config["tile_height"] + 2 * config["buffer"],
+                           f"{directory}/{stem}.tif")
+
+            cropped_image_names.append(output_filename)
+
+    return cropped_image_names
 
 
 def process_files(config):
@@ -425,19 +383,34 @@ def process_files(config):
     end = time.time()
     postprocess_files_duration = end - start
 
+    cleanup_files(config)
+
+    # Print stats about the processing
+    logger.debug(f"preprocess step took {preprocess_files_duration} seconds. ")
+    logger.debug(f"predict step took {predict_tiles_duration} seconds. ")
+    logger.debug(f"postprocess step took {postprocess_files_duration} seconds. ")
+
+def cleanup_files(config):
     if not config.get('keep_intermediate', False):
         shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+        shutil.rmtree(config["image_directory"] + "/" + config["merged_path"])  # Remove the merged image directory
+        shutil.rmtree(config["height_data_path"] + "/" + config["merged_path"])  # Remove the merged tile directory
+
+        # Remove merged/cropped files in height / image directory
+        for file in os.listdir(config["image_directory"]):
+            if "__" in file:
+                os.remove(os.path.join(config["image_directory"], file))
+
+        for file in os.listdir(config["height_data_path"]):
+            if "__" in file:
+                os.remove(os.path.join(config["height_data_path"], file))
+
     for folder in os.listdir(config["output_directory"]):
         folder = os.path.join(config["output_directory"], folder)
         keep_folders = ["processed_exclusions", "logs"]
         if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get(
                 'keep_intermediate', False):
             shutil.rmtree(folder)
-
-    # Print stats about the processing
-    logger.debug(f"preprocess step took {preprocess_files_duration} seconds. ")
-    logger.debug(f"predict step took {predict_tiles_duration} seconds. ")
-    logger.debug(f"postprocess step took {postprocess_files_duration} seconds. ")
 
 
 def profile_code(config, threshold=0.05):

@@ -471,12 +471,16 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         # Load predictions
         with open(file, "r") as pred_file:
             data = json.load(pred_file)
-        
+
+        bounding_box = box_filter(tifpath, shift)
+
         # Process each prediction
         features = []
         for crown_data in data:
+            unreshaped_coords = None
             if 'polygon_coords' in crown_data:
                 coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
+                unreshaped_coords = np.array(crown_data["polygon_coords"])
             else:
                 if "bbox" in crown_data:
                     bbox = np.array(crown_data["bbox"])
@@ -487,17 +491,19 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
                 if not polygon_coords:
                     continue
                 crown_data["polygon_coords"] = polygon_coords
-                coords = np.array(polygon_coords).reshape(-1, 2)            
+                coords = np.array(polygon_coords).reshape(-1, 2)
+                unreshaped_coords = np.array(polygon_coords)
             polygon = Polygon(coords)
 
-            features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
-        
+            # Check if it's near the tile border
+            is_inside = exclude_elements_near_border(unreshaped_coords, bounding_box)
+            if is_inside:
+                features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
+
         gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
         
         if simplify_tolerance > 0:
             gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
-        
-        bounding_box = box_filter(tifpath, shift)
         filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
         if 'index_right' in filtered_gdf.columns:
             filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
@@ -507,6 +513,22 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         if logger:
             logger.warn(f"Error processing file {file}: {e}")
         return None
+
+
+def exclude_elements_near_border(filtered_gdf, bounding_box):
+    eps = 20
+
+    minx = bounding_box.geometry.bounds.minx.iloc[0] + eps
+    miny = bounding_box.geometry.bounds.miny.iloc[0] + eps
+    maxx = bounding_box.geometry.bounds.maxx.iloc[0] - eps
+    maxy = bounding_box.geometry.bounds.maxy.iloc[0] - eps
+
+    x_coords = filtered_gdf[:, :, 0]
+    y_coords = filtered_gdf[:, :, 1]
+
+    if (np.array(x_coords[0]) < minx).any() or (np.array(x_coords[0]) > maxx).any() or (np.array(y_coords[0]) < miny).any() or (np.array(y_coords[0]) > maxy).any():
+        return False
+    return True
 
 
 def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
@@ -1046,7 +1068,6 @@ def merge_images(filename1, filename2, output_filename):
         # Merge the images
         merged_data, merged_transform = merge([src1, src2])
 
-        print(merged_data.shape)
         # Update metadata for the merged image
         merged_meta = src1.meta.copy()
         merged_meta.update({
@@ -1055,8 +1076,6 @@ def merge_images(filename1, filename2, output_filename):
             "width": merged_data.shape[2],
             "transform": merged_transform,
         })
-
-        print(merged_meta)
 
         # Write the merged image to the output file
         with rasterio.open(output_filename, "w", **merged_meta) as dest:
@@ -1097,4 +1116,6 @@ def crop_image(filename, width, height, output_filename):
         with rasterio.open(output_filename, "w", **cropped_meta) as dest:
             dest.write(cropped_data)
 
+
     print(f"Cropped image saved to {output_filename}")
+    return output_filename

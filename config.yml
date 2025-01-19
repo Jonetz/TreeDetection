@@ -7,6 +7,7 @@ forrest_model: "data/model_forrest.pth"  # optional if combined_model is used
 forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # optional if combined_model is used
 output_directory: "output"  # default: ./output
 tiles_path: "tiles"  # default: ./tiles
+merged_path: "merged"  # default: ./merged
 # continue_path: "/home/jonas/tree_detection/tree_detection/output/continue.yml"  # default: ./output/continue.yml
 image_regex: "FDOP20_(\\d+)_(\\d+)_rgbi\\.tif" # r"FDOP\d{2}_(\d+)_rgbi\.tif"  # default: ".*_fdop.tif"
 height_data_regex: "nDSM_(\\d+)_1km\\.tif"  # default: ".*_nDSM.tif"
