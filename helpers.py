@@ -1054,68 +1054,48 @@ def retrieve_neighboring_image_filenames(filename, other_filenames):
     return (left, right, up, down)
 
 
-def merge_images(filename1, filename2, output_filename):
+def merge_images(src1, src2):
     # Open the input images
-    output_dir = os.path.dirname(output_filename)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)  # Create the directory on the fly
+    if src1.crs != src2.crs:
+        raise ValueError("CRS of the two images do not match.")
 
-    with rasterio.open(filename1) as src1, rasterio.open(filename2) as src2:
-        # Ensure the CRS (Coordinate Reference System) is the same
-        if src1.crs != src2.crs:
-            raise ValueError("CRS of the two images do not match.")
+    # Merge the images
+    merged_data, merged_transform = merge([src1, src2])
 
-        # Merge the images
-        merged_data, merged_transform = merge([src1, src2])
-
-        # Update metadata for the merged image
-        merged_meta = src1.meta.copy()
-        merged_meta.update({
-            "driver": "GTiff",
-            "height": merged_data.shape[1],
-            "width": merged_data.shape[2],
-            "transform": merged_transform,
-        })
-
-        # Write the merged image to the output file
-        with rasterio.open(output_filename, "w", **merged_meta) as dest:
-            dest.write(merged_data)
-
-    print(f"Merged image saved to {output_filename}")
+    # Update metadata for the merged image
+    merged_meta = src1.meta.copy()
+    merged_meta.update({
+        "driver": "GTiff",
+        "height": merged_data.shape[1],
+        "width": merged_data.shape[2],
+        "transform": merged_transform,
+    })
+    return merged_data, merged_meta
 
 
-def crop_image(filename, width, height, output_filename):
-    output_dir = os.path.dirname(output_filename)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)  # Create the directory on the fly
-    with rasterio.open(filename) as src:
-        # Get the image dimensions
-        img_width, img_height = src.width, src.height
+def crop_image(src, width, height):
+    # Get the image dimensions
+    img_width, img_height = src.width, src.height
 
-        # Compute the center of the image
-        center_x, center_y = img_width // 2, img_height // 2
+    # Compute the center of the image
+    center_x, center_y = img_width // 2, img_height // 2
 
-        # Calculate the bounds of the cropping window
-        window_left = max(center_x - width // 2, 0)
-        window_top = max(center_y - height // 2, 0)
-        window = Window(window_left, window_top, width, height)
+    # Calculate the bounds of the cropping window
+    window_left = max(center_x - width // 2, 0)
+    window_top = max(center_y - height // 2, 0)
+    window = Window(window_left, window_top, width, height)
 
-        # Read the cropped window
-        cropped_data = src.read(window=window)
+    # Read the cropped window
+    cropped_data = src.read(window=window)
 
-        # Update metadata for the cropped image
-        cropped_transform = src.window_transform(window)
-        cropped_meta = src.meta.copy()
-        cropped_meta.update({
-            "width": width,
-            "height": height,
-            "transform": cropped_transform
-        })
+    # Update metadata for the cropped image
+    cropped_transform = src.window_transform(window)
+    cropped_meta = src.meta.copy()
+    cropped_meta.update({
+        "width": width,
+        "height": height,
+        "transform": cropped_transform
+    })
 
-        # Save the cropped image
-        with rasterio.open(output_filename, "w", **cropped_meta) as dest:
-            dest.write(cropped_data)
-
-
-    print(f"Cropped image saved to {output_filename}")
-    return output_filename
+    # Save the cropped image
+    return cropped_data, cropped_meta
