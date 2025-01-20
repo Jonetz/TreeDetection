@@ -1017,6 +1017,13 @@ def plot_ndvi_values(values_array: np.ndarray):
 
 
 def retrieve_neighboring_image_filenames(filename, other_filenames):
+    """
+    Retrieve the filenames of the neighboring images.
+
+    Args:
+        filename (str): Filename of the image.
+        other_filenames (list): List of other filenames.
+    """
     x_coord, y_coord = filename_geoinfo(filename)
 
     parts = os.path.basename(filename).replace(".tif", "").split("_")
@@ -1055,6 +1062,13 @@ def retrieve_neighboring_image_filenames(filename, other_filenames):
 
 
 def merge_images(src1, src2):
+    """
+    Merge two images with the same CRS.
+
+    Args:
+        src1 (rasterio.DatasetReader): First image.
+        src2 (rasterio.DatasetReader): Second image.
+    """
     # Open the input images
     if src1.crs != src2.crs:
         raise ValueError("CRS of the two images do not match.")
@@ -1074,6 +1088,14 @@ def merge_images(src1, src2):
 
 
 def crop_image(src, width, height):
+    """
+    Crop an image to the specified dimensions.
+
+    Args:
+        src (rasterio.DatasetReader): Source image.
+        width (int): Width of the cropped image.
+        height (int): Height of the cropped image.
+    """
     # Get the image dimensions
     img_width, img_height = src.width, src.height
 
