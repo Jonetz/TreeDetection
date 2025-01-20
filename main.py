@@ -285,9 +285,11 @@ def preprocess_files(config):
 
     # Check if there is a neighboring image, where we have to create a intermediate image
     # We also have to do this for the height data
+    images_paths = [path for path in images_paths if "__" not in path]
+    height_paths = [path for path in height_paths if "__" not in path]
 
-    cropped_image_filenames = save_cropped_images(images_paths, config["image_directory"])
-    cropped_height_filenames = save_cropped_images(height_paths, config["height_data_path"])
+    cropped_image_filenames = save_cropped_images(images_paths)
+    cropped_height_filenames = save_cropped_images(height_paths)
 
     images_paths.extend(cropped_image_filenames)
     height_paths.extend(cropped_height_filenames)
@@ -315,12 +317,10 @@ def preprocess_files(config):
     return images_paths
 
 
-def save_cropped_images(images_path, image_directory):
-    uncropped_img = [path for path in images_path if "__" not in path]
+def save_cropped_images(images_path):
     cropped_image_names = []
-
-    for f in uncropped_img:
-        uncropped_img_filenames = [os.path.basename(path) for path in uncropped_img]
+    for f in images_path:
+        uncropped_img_filenames = [os.path.basename(path) for path in images_path]
         left, right, up, down = retrieve_neighboring_image_filenames(f, uncropped_img_filenames)
 
         directory = os.path.dirname(f)
