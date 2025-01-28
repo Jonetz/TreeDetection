@@ -48,3 +48,4 @@ num_workers: 1  # default: 10
 verbose: False  # default: false
 debug: True  # default: false
 keep_intermediate: True  # default: false
+timestamped_output_directory: True
