@@ -297,6 +297,8 @@ def preprocess_files(config):
     images_paths = [path for path in images_paths if "__" not in path]
     height_paths = [path for path in height_paths if "__" not in path]
 
+    merged_directory = config["merged_path"]
+
     def save_cropped_images(images_path):
         """
         Save the cropped images based on the neighboring images.
@@ -310,6 +312,8 @@ def preprocess_files(config):
             left, right, up, down = retrieve_neighboring_image_filenames(f, uncropped_img_filenames)
 
             directory = os.path.dirname(f)
+            result_directory = f"{directory}/{merged_directory}"
+            os.makedirs(result_directory, exist_ok=True)
             f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
             f_x_coord, f_y_coord = filename_geoinfo(f)
 
@@ -331,10 +335,10 @@ def preprocess_files(config):
                                                                     config["overlapping_tiles_width"],
                                                                     merged_src.height)
                             # Save the cropped image
-                            with rasterio.open(f"{directory}/{output_filename}", "w", **cropped_meta) as dest:
+                            with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
                                 dest.write(cropped_data)
 
-                            cropped_image_names.append(f"{directory}/{output_filename}")
+                            cropped_image_names.append(f"{result_directory}/{output_filename}")
 
             if down is not None:
                 down_x_coord, down_y_coord = filename_geoinfo(f"{directory}/{down}")
@@ -352,10 +356,10 @@ def preprocess_files(config):
                                                                     (config["tile_height"] + 2 * config["buffer"]) *
                                                                     config["overlapping_tiles_height"])
                             # Save the cropped image
-                            with rasterio.open(f"{directory}/{output_filename}", "w", **cropped_meta) as dest:
+                            with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
                                 dest.write(cropped_data)
 
-                            cropped_image_names.append(f"{directory}/{output_filename}")
+                            cropped_image_names.append(f"{result_directory}/{output_filename}")
 
         return cropped_image_names
 
