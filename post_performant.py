@@ -4,6 +4,7 @@ import warnings
 
 import json
 import os
+from pathlib import Path
 from typing import Tuple
 import sys
 import time
@@ -206,7 +207,7 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
 
         # Handle empty result (fallback to centroid)
         if inside_heights.size == 0:
-            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
+            print(f"TODO No height points found within polygon {i}. Implementing fallback to centroid.")
             max_coordinates[i] = cp.array([-1, -1])
             max_heights[i] = -1  # Placeholder value, can be adjusted
         else:
@@ -306,7 +307,7 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
         #inside_ndvi = subset.flatten()[inside_mask]
         
         if inside_ndvi.shape[0] == 0:
-            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
+            print(f"TODO No NDVI points found within polygon {i}. Implementing fallback to centroid.")
             min_ndvi_values[i] = -1
             max_ndvi_values[i] = -1
             mean_ndvi_values[i] = -1
@@ -1061,18 +1062,20 @@ def process_files_in_directory(directory, height_directory, image_directory, par
     def find_matching_file(base_name, geojson_pattern, search_pattern, directory):
         """Find a matching height data file based on regex groups from the base name."""
         geojson_match = geojson_pattern.match(base_name + ".tif")
+        print("BASENAME ", base_name, geojson_match, search_pattern, directory, filename_pattern)
         if geojson_match:
             geojson_groups = geojson_match.groups()  # Capture groups for matching
             geojson_concat = ''.join(geojson_groups)
-            for file in os.listdir(directory):
-                search_match = search_pattern.match(file)
-                if search_match:
-                    search_groups = search_match.groups()
-                    search_concat = ''.join(
-                        search_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
-                    # Check if height groups start with geojson groups
-                    if search_concat == geojson_concat:
-                        return os.path.join(directory, file)
+            for file in Path(directory).rglob("*"):
+                if file.is_file():
+                    file = str(file)
+                    search_match = search_pattern.match(file)
+                    if search_match:
+                        search_groups = search_match.groups()
+                        search_concat = ''.join(search_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
+                        # Check if height groups start with geojson groups
+                        if search_concat == geojson_concat:
+                            return os.path.join(file)
         return None
 
     if not parallel:

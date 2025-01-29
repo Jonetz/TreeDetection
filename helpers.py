@@ -18,6 +18,7 @@ from pathlib import Path
 import rasterio
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
+from numpy.f2py.auxfuncs import throw_error
 from rasterio.coords import BoundingBox
 from rasterio.merge import merge
 from rasterio.transform import xy
@@ -272,10 +273,11 @@ def filename_geoinfo(filename):
 
         parts = [int(part) for part in parts[1:]]  # type: ignore
 
-        x_coord = parts[0]
-        y_coord = parts[1]
-
-        return (x_coord, y_coord)
+        if len(parts) == 2:
+            x_coord = parts[0]
+            y_coord = parts[1]
+            return (x_coord, y_coord)
+        raise Exception("Filename not compatible.")
     else:
         parts = os.path.basename(filename).replace(".geojson", "").replace(".json", "").replace(".gpkg", "").split("_")
 
@@ -496,9 +498,11 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
             polygon = Polygon(coords)
 
             # Check if it's near the tile border
-            is_inside = exclude_elements_near_border(unreshaped_coords, bounding_box)
-            if is_inside:
-                features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
+            # TODO: This is buggy
+            # is_inside = exclude_elements_near_border(unreshaped_coords, bounding_box)
+            # if is_inside:
+            #     features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
+            features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
 
         gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
         
@@ -1024,41 +1028,45 @@ def retrieve_neighboring_image_filenames(filename, other_filenames):
         filename (str): Filename of the image.
         other_filenames (list): List of other filenames.
     """
-    x_coord, y_coord = filename_geoinfo(filename)
+    try:
+        x_coord, y_coord = filename_geoinfo(filename)
 
-    parts = os.path.basename(filename).replace(".tif", "").split("_")
+        parts = os.path.basename(filename).replace(".tif", "").split("_")
 
-    image_filename_left = f"{parts[0]}_{x_coord - 1}_{y_coord}.tif"
-    image_filename_right = f"{parts[0]}_{x_coord + 1}_{y_coord}.tif"
-    image_filename_up = f"{parts[0]}_{x_coord}_{y_coord + 1}.tif"
-    image_filename_down = f"{parts[0]}_{x_coord}_{y_coord - 1}.tif"
+        image_filename_left = f"{parts[0]}_{x_coord - 1}_{y_coord}.tif"
+        image_filename_right = f"{parts[0]}_{x_coord + 1}_{y_coord}.tif"
+        image_filename_up = f"{parts[0]}_{x_coord}_{y_coord + 1}.tif"
+        image_filename_down = f"{parts[0]}_{x_coord}_{y_coord - 1}.tif"
 
-    left_exists = image_filename_left in other_filenames
-    right_exists = image_filename_right in other_filenames
-    up_exists = image_filename_up in other_filenames
-    down_exists = image_filename_down in other_filenames
+        left_exists = image_filename_left in other_filenames
+        right_exists = image_filename_right in other_filenames
+        up_exists = image_filename_up in other_filenames
+        down_exists = image_filename_down in other_filenames
 
-    if left_exists:
-        left = image_filename_left
-    else:
-        left = None
+        if left_exists:
+            left = image_filename_left
+        else:
+            left = None
 
-    if right_exists:
-        right = image_filename_right
-    else:
-        right = None
+        if right_exists:
+            right = image_filename_right
+        else:
+            right = None
 
-    if up_exists:
-        up = image_filename_up
-    else:
-        up = None
+        if up_exists:
+            up = image_filename_up
+        else:
+            up = None
 
-    if down_exists:
-        down = image_filename_down
-    else:
-        down = None
+        if down_exists:
+            down = image_filename_down
+        else:
+            down = None
 
-    return (left, right, up, down)
+        return (left, right, up, down)
+
+    except:
+        return (None, None, None, None)
 
 
 def merge_images(src1, src2):

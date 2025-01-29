@@ -98,6 +98,10 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
     images_directory = Path(config["image_directory"])
     images_paths = [str(f) for f in images_directory.glob("*.tif")]
 
+    merged_directory = Path(f"{images_directory}/{config['merged_path']}")
+    merged_images = [str(f) for f in merged_directory.glob("*.tif")]
+    images_paths.extend(merged_images)
+
     if not images_paths:
         logger.warning("No TIF files found for prediction.")
         return
@@ -321,8 +325,8 @@ def preprocess_files(config):
             if right is not None:
                 right_x_coord, right_y_coord = filename_geoinfo(f"{directory}/{right}")
 
-                with rasterio.open(f) as img1, rasterio.open(f"{directory}/{right}") as img2:
-                    merged_img, merged_img_meta = merge_images(img1, img2)
+                with rasterio.open(f) as left_img, rasterio.open(f"{directory}/{right}") as right_img:
+                    merged_img, merged_img_meta = merge_images(left_img, right_img)
 
                     # Write the merged file only to memory for faster processing
                     with rasterio.MemoryFile() as memfile:
@@ -343,8 +347,8 @@ def preprocess_files(config):
             if down is not None:
                 down_x_coord, down_y_coord = filename_geoinfo(f"{directory}/{down}")
 
-                with rasterio.open(f) as img1, rasterio.open(f"{directory}/{down}") as img2:
-                    merged_img, merged_img_meta = merge_images(img1, img2)
+                with rasterio.open(f) as top_img, rasterio.open(f"{directory}/{down}") as bottom_img:
+                    merged_img, merged_img_meta = merge_images(top_img, bottom_img)
 
                     # Write the merged file only to memory for faster processing
                     with rasterio.MemoryFile() as memfile:
@@ -364,12 +368,15 @@ def preprocess_files(config):
         return cropped_image_names
 
     # Here we merge and crop neighboring images
-    cropped_image_filenames = save_cropped_images(images_paths)
-    cropped_height_filenames = save_cropped_images(height_paths)
+    try:
+        cropped_image_filenames = save_cropped_images(images_paths)
+        cropped_height_filenames = save_cropped_images(height_paths)
 
-    # Include the image paths of the cropped images to the list of images to be processed
-    images_paths.extend(cropped_image_filenames)
-    height_paths.extend(cropped_height_filenames)
+        # Include the image paths of the cropped images to the list of images to be processed
+        images_paths.extend(cropped_image_filenames)
+        height_paths.extend(cropped_height_filenames)
+    except Exception as e:
+        logger.error(f"Error merging and cropping images: {e}")
 
     # Validate height data availability
     missing_height_data = []
