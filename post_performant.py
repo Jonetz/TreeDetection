@@ -640,8 +640,9 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
 
     # Step 4: Update features with containment information
     updated_features = []
-    for i, feature in enumerate(features):
-        if polygon_ids[i] not in polygon_ids:
+    for feature in features:
+        i =  int(feature['properties']['poly_id'])
+        if i not in polygon_ids:
             continue  # Skip invalid features
         new_properties = dict(feature['properties'])
         new_properties['is_contained'] = bool(cp.any(is_contained[:, i]).get())  # Is this polygon contained?
