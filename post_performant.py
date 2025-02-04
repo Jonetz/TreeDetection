@@ -727,14 +727,12 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     centroids = get_centroids(polygon_x_gpu, polygon_y_gpu)
 
     if height_transform.almost_equals(ndvi_transform) and check_similarity_bounds(height_bounds, ndvi_bounds):
-        print("Process NDVI and Height information together.")
         height_values, ndvi_values = get_metadata_within_polygon(polygon_x_gpu, polygon_y_gpu, ndvi_data_gpu, height_data_gpu, ndvi_transform, height_data.shape[0], height_data.shape[1], ndvi_bounds)
 
         min_ndvi, max_ndvi, mean_ndvi, var_ndvi = ndvi_values
         heights, highest_points = height_values
     else:
         # Perform height data lookups for all polygons at once on the GPU
-        print("Process NDVI and Height information separately.")
         heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, height_data.shape[0],
                                                                         height_data.shape[1], height_bounds)
 

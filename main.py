@@ -42,7 +42,7 @@ def postprocess_files(config):
 
     # 4. Save the final predictions as gpkg in another folder
     for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
-        if not (file.endswith('.geojson') or file.endswith('.gpkg')) or file.startswith('processed_'):
+        if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
             continue
         crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
@@ -191,7 +191,7 @@ def predict_tiles(config):
     elif "combined_model" in config and config["combined_model"] and os.path.exists(config["combined_model"]):
         logger.info("Only Combined Model is given. Starting prediction...")
 
-        folder = os.path.join(config["output_directory"], "geojson")
+        folder = os.path.join(config["output_directory"], "geojson_predictions")
         # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
         logger.info(f'Starting prediction with model {config["combined_model"]}...')
         start = time.time()
@@ -370,7 +370,7 @@ def profile_code(config, threshold=0.05):
 
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn', force=True)
-    config = get_config("config.yml")
+    config, _ = get_config("config.yml")
 
     # Print Information about the configuration
 
