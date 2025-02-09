@@ -2,23 +2,21 @@ import asyncio
 import json
 import os
 import aiofiles
-import cv2
 import geopandas as gpd
 import numpy as np
 import rasterio
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from shapely.geometry import box
-from rasterio.mask import mask, geometry_window
-import shutil
-from concurrent.futures import ThreadPoolExecutor
+from rasterio.mask import geometry_window
 import cupy as cp
-from helpers import delete_contents
+
 """
 Tiling orthomosaic data.
 
 Adapted from detectree2.preprocessing.tiling.tile_data function. (Released under MIT License, Version 1.2.x)
 """
+
 def get_features(gdf: gpd.GeoDataFrame):
     """Function to parse features from GeoDataFrame in such a manner that rasterio wants them."""
     return [json.loads(gdf.to_json())["features"][0]["geometry"]]

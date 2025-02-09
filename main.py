@@ -11,16 +11,14 @@ from prediction import Predictor
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import process_and_stitch_predictions, fuse_predictions, delete_contents
+from helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
 from post_performant import process_files_in_directory
 
-from concurrent.futures import ThreadPoolExecutor
 import geopandas as gpd
 import shutil
 from torch.amp import autocast
 
 gpd.options.display_precision = 2
-
 
 def postprocess_files(config):
     """
@@ -29,9 +27,9 @@ def postprocess_files(config):
     logger = config["logger"]
     logger.info("Postprocessing the predictions.")
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
-    # 1. Filter with exclude outlines
-    # logger.info("Excluding Outlines.")
-    # exclude_outlines(config)
+    #1. Filter with exclude outlines
+    logger.info("Excluding Outlines.")
+    exclude_outlines(config)
 
     # 2. Filter with post-processing rules
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
@@ -326,10 +324,13 @@ def process_files(config):
     postprocess_files_duration = end - start
 
     if not config.get('keep_intermediate', False):
-        shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+        try:
+            shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+        except FileNotFoundError:
+            pass
     for folder in os.listdir(config["output_directory"]):
         folder = os.path.join(config["output_directory"], folder)
-        keep_folders = ["processed_exclusions", "logs"]
+        keep_folders = ["logs"]
         if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get(
                 'keep_intermediate', False):
             shutil.rmtree(folder)

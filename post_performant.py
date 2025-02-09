@@ -4,21 +4,13 @@ import warnings
 
 import json
 import os
-from typing import Tuple
 import sys
-import time
-
 import rasterio
 from fiona.model import to_dict
 import fiona
 
-import shapely
-import numba
-import shapely
-from rasterio._base import Affine
 from rasterio.coords import BoundingBox
 from rasterio.enums import Resampling
-from shapely.geometry import shape, Point
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
 
@@ -423,7 +415,6 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
         inside_coords = np.column_stack([x_coords_gpu[inside_mask], y_coords_gpu[inside_mask]])
 
         if inside_ndvi.shape[0] == 0:
-            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
             min_ndvi_values[i] = -1
             max_ndvi_values[i] = -1
             mean_ndvi_values[i] = -1
@@ -442,7 +433,6 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
             var_ndvi_values[i] = var_ndvi
 
         if inside_heights.size == 0:
-            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
             max_coordinates[i] = cp.array([-1, -1])
             max_heights[i] = -1  # Placeholder value, can be adjusted
         else:
@@ -1013,8 +1003,6 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
     # Filter features based on the provided conditions
     filtered_features = []
     for feature in processed_data["features"]:
-        properties = feature['properties']
-
         # Convert 'Centroid' to a JSON string if it exists
         if 'Centroid' in feature['properties']:
             feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
@@ -1112,40 +1100,3 @@ def process_files_in_directory(directory, height_directory, image_directory, par
             # Ensure all futures complete
             for future in futures:
                 future.result()
-
-
-def profile_code():
-    """
-    Profile the code to analyze performance using cProfile.
-    """
-    import cProfile
-    import pstats
-    import io
-    pr = cProfile.Profile()
-
-    geojson_directory = '/output/geojson_predictions'
-    height_directory = '/data/nDSM_anno'
-
-    pr.enable()
-    process_files_in_directory(geojson_directory, height_directory, parallel=True, filename_pattern=("FDOP20_(\\d+)_(\\d+)_rgbi\\.tif","nDSM_(\\d+)_1km\\.tif"))
-
-    pr.disable()
-
-    s = io.StringIO()
-    # Sort by cumulative time and apply the threshold
-    ps = pstats.Stats(pr, stream=s).sort_stats(pstats.SortKey.CUMULATIVE)
-    ps.print_stats(0.1)  # Only display functions above the cumulative time threshold
-
-    print(s.getvalue())
-
-
-if __name__ == "__main__":
-    profile_code()
-    exit()
-
-    geojson_directory = 'output/geojson_predictions'
-    height_dir = 'data/nDSM'
-    image_directory = 'data/rgb'
-
-    process_files_in_directory(geojson_directory, height_dir, image_directory,
-                               parallel=False)
