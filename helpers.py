@@ -1,8 +1,12 @@
 import asyncio
 import os
+import sys
+
 import aiofiles
 import cv2
 import json
+
+import fiona
 import numpy as np
 import warnings
 import traceback
@@ -16,6 +20,7 @@ import pandas as pd
 from pathlib import Path
 
 import rasterio
+from fiona.model import to_dict
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
 from numpy.f2py.auxfuncs import throw_error
@@ -271,13 +276,12 @@ def filename_geoinfo(filename):
     if os.path.splitext(filename)[1] == ".tif":
         parts = os.path.basename(filename).replace(".tif", "").split("_")
 
-        parts = [int(part) for part in parts[1:]]  # type: ignore
-
-        if len(parts) == 2:
-            x_coord = parts[0]
-            y_coord = parts[1]
-            return (x_coord, y_coord)
-        raise Exception("Filename not compatible.")
+        try:
+            x_coord = int(parts[1])
+            y_coord = int(parts[2])
+            return x_coord, y_coord
+        except Exception as e:
+            raise Exception("Filename not compatible.", e)
     else:
         parts = os.path.basename(filename).replace(".geojson", "").replace(".json", "").replace(".gpkg", "").split("_")
 
@@ -288,6 +292,11 @@ def filename_geoinfo(filename):
         buffer = parts[3]
         crs = parts[4]
         return (minx, miny, width, buffer, crs)
+
+
+def tif_geoinfo(filename):
+    with rasterio.open(filename, 'r') as source:
+        return source.transform, source.crs, source.width, source.height
 
 
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
@@ -1028,45 +1037,36 @@ def retrieve_neighboring_image_filenames(filename, other_filenames):
         filename (str): Filename of the image.
         other_filenames (list): List of other filenames.
     """
-    try:
-        x_coord, y_coord = filename_geoinfo(filename)
+    transform, crs, width, height = tif_geoinfo(filename)
+    x = transform.c
+    y = transform.f
 
-        parts = os.path.basename(filename).replace(".tif", "").split("_")
+    left = None
+    right = None
+    up = None
+    down = None
 
-        image_filename_left = f"{parts[0]}_{x_coord - 1}_{y_coord}.tif"
-        image_filename_right = f"{parts[0]}_{x_coord + 1}_{y_coord}.tif"
-        image_filename_up = f"{parts[0]}_{x_coord}_{y_coord + 1}.tif"
-        image_filename_down = f"{parts[0]}_{x_coord}_{y_coord - 1}.tif"
+    eps = 1e-3
 
-        left_exists = image_filename_left in other_filenames
-        right_exists = image_filename_right in other_filenames
-        up_exists = image_filename_up in other_filenames
-        down_exists = image_filename_down in other_filenames
+    for other in other_filenames:
+        if other == filename:
+            continue
 
-        if left_exists:
-            left = image_filename_left
-        else:
-            left = None
+        other_transform, other_crs, other_width, other_height = tif_geoinfo(other)
 
-        if right_exists:
-            right = image_filename_right
-        else:
-            right = None
+        if abs(other_transform.c - (x - (width*other_transform.a))) < eps and abs(other_transform.f - y) < eps:
+            left = other
 
-        if up_exists:
-            up = image_filename_up
-        else:
-            up = None
+        if abs(other_transform.c - (x + (width*other_transform.a))) < eps and abs(other_transform.f - y) < eps:
+            right = other
 
-        if down_exists:
-            down = image_filename_down
-        else:
-            down = None
+        if abs(other_transform.f - (y + (height*other_transform.a))) < eps and abs(other_transform.c - x) < eps:
+            up = other
 
-        return (left, right, up, down)
+        if abs(other_transform.f - (y - (height*other_transform.a))) < eps and abs(other_transform.c - x) < eps:
+            down = other
 
-    except:
-        return (None, None, None, None)
+    return (left, right, up, down)
 
 
 def merge_images(src1, src2):
