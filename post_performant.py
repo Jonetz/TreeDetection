@@ -492,7 +492,7 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
     ids = list(polygon_dict.keys())
     
     # Convert data to CuPy arrays
-    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids], dtype=cp.float16)
+    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids])
     confidences = cp.array([confidence_scores[pid] for pid in ids], dtype=cp.float16)
     areas = cp.array([id_to_area[pid] for pid in ids], dtype=cp.float16)
     
