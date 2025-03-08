@@ -51,11 +51,20 @@ def setup_model_cfg(base_model="COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x
     return cfg
 
 def load_config(config_path: str):
+    """Method to load  YAML config from a filepath
+
+    Args:
+        config_path (str): Path to the configuration file.
+
+    Returns:
+        dictionary: Configuration dictionary
+    """
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     return config
 
 def setup_logging(log_path: str, debug: bool):
+    """Set up logging configuration."""
     # Create the log directory if it doesn't exist
     os.makedirs(log_path, exist_ok=True)
     
@@ -139,7 +148,7 @@ def get_config(config_path: str):
     # batch size best exerimentally, should be equivalent to 1.2 * Available GPU RAM
     config["tile_width"] = config.get("tile_width", 50)
     config["tile_height"] = config.get("tile_height", 50)
-    config["buffer"] = config.get("buffer", 0)
+    config["buffer"] = config.get("buffer", 20)
     config["batch_size"] = config.get("batch_size", 10)
 
     # 4. Check the post-processing parameters

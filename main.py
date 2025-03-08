@@ -18,15 +18,14 @@ from config import get_config, setup_model_cfg
 from tiling import tile_data
 from helpers import process_and_stitch_predictions, fuse_predictions, delete_contents, \
     retrieve_neighboring_image_filenames, merge_images, filename_geoinfo, crop_image, tif_geoinfo
+from helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
 from post_performant import process_files_in_directory
 
-from concurrent.futures import ThreadPoolExecutor
 import geopandas as gpd
 import shutil
 from torch.amp import autocast
 
 gpd.options.display_precision = 2
-
 
 def postprocess_files(config):
     """
@@ -35,9 +34,9 @@ def postprocess_files(config):
     logger = config["logger"]
     logger.info("Postprocessing the predictions.")
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
-    # 1. Filter with exclude outlines
-    # logger.info("Excluding Outlines.")
-    # exclude_outlines(config)
+    #1. Filter with exclude outlines
+    logger.info("Excluding Outlines.")
+    exclude_outlines(config)
 
     # 2. Filter with post-processing rules
     process_files_in_directory(os.path.join(config["output_directory"], 'geojson_predictions'),
@@ -50,7 +49,7 @@ def postprocess_files(config):
     timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
     # 4. Save the final predictions as gpkg in another folder
     for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
-        if not (file.endswith('.geojson') or file.endswith('.gpkg')) or file.startswith('processed_'):
+        if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
             continue
         crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
@@ -210,7 +209,7 @@ def predict_tiles(config):
     elif "combined_model" in config and config["combined_model"] and os.path.exists(config["combined_model"]):
         logger.info("Only Combined Model is given. Starting prediction...")
 
-        folder = os.path.join(config["output_directory"], "geojson")
+        folder = os.path.join(config["output_directory"], "geojson_predictions")
         # Predict the tiles using the urban modelasyncio.run(predict_on_model(config, config["urban_model"], config["tiles_path"], config["output_path"]))
         logger.info(f'Starting prediction with model {config["combined_model"]}...')
         start = time.time()
@@ -444,9 +443,12 @@ def process_files(config):
 
 def cleanup_files(config):
     if not config.get('keep_intermediate', False):
-        shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
-        shutil.rmtree(config["image_directory"] + "/" + config["merged_path"])  # Remove the merged image directory
-        shutil.rmtree(config["height_data_path"] + "/" + config["merged_path"])  # Remove the merged tile directory
+        try:
+            shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+            shutil.rmtree(config["image_directory"] + "/" + config["merged_path"])  # Remove the merged image directory
+            shutil.rmtree(config["height_data_path"] + "/" + config["merged_path"])  # Remove the merged tile directory
+        except FileNotFoundError:
+            pass
 
         # Remove merged/cropped files in height / image directory
         for file in os.listdir(config["image_directory"]):
@@ -457,13 +459,13 @@ def cleanup_files(config):
             if "__" in file:
                 os.remove(os.path.join(config["height_data_path"], file))
 
+
     for folder in os.listdir(config["output_directory"]):
         folder = os.path.join(config["output_directory"], folder)
-        keep_folders = ["processed_exclusions", "logs"]
+        keep_folders = ["logs"]
         if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get(
                 'keep_intermediate', False):
             shutil.rmtree(folder)
-
 
 def profile_code(config, threshold=0.05):
     """
@@ -495,7 +497,7 @@ def profile_code(config, threshold=0.05):
 
 if __name__ == "__main__":
     # multiprocessing.set_start_method('spawn', force=True)
-    config, config_obj = get_config("config.yml")
+    config, _ = get_config("config.yml")
 
     # Print Information about the configuration
 

@@ -11,7 +11,6 @@ import numpy as np
 import warnings
 import traceback
 import shutil
-import time
 import numba as nb
 
 import geopandas as gpd
@@ -40,9 +39,13 @@ from affine import Affine
 from shapely.geometry import box, shape
 import cupy as cp
 
-import aiofiles
-
 def exclude_outlines(config):
+    """
+    Exclude crowns that are within the outlines of the exclude files.
+
+    Warning: If the exclude outline contains a lot of shapes it can take a long time to process or result in Out-of-memory errors.
+    """
+
     for outline in config.get('exclude_files', []):
         exclude_outline = gpd.read_file(outline)
 
@@ -66,20 +69,6 @@ def exclude_outlines(config):
 
             # Write the filtered crowns back to the original path, overwriting the original file
             crowns_filtered.to_file(file_path, driver='GPKG')
-
-class RoundedFloatEncoder(json.JSONEncoder):
-    def __init__(self, *args, precision=2, **kwargs):
-        self.precision = precision
-        super().__init__(*args, **kwargs)
-
-    def encode(self, obj):
-        if isinstance(obj, float):
-            return format(obj, f".{self.precision}f")
-        elif isinstance(obj, dict):
-            return "{" + ", ".join(f"{self.encode(k)}: {self.encode(v)}" for k, v in obj.items()) + "}"
-        elif isinstance(obj, list):
-            return "[" + ", ".join(self.encode(v) for v in obj) + "]"
-        return super().encode(obj)
 
 
 def polygon_from_mask(masked_arr):
@@ -192,6 +181,17 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
         return folder_name  # Return the folder name which is the base image name
 
     def process_file(filename):
+        """Function to process a single prediction file.
+
+        Args:
+            filename (Path): Path to the prediction file.
+
+        Raises:
+            FileNotFoundError: If no matching TIFF file is found for the prediction file.
+
+        Returns:
+            str: Success or error message.
+        """
         try:
             # Extract the tile image name from the prediction file
             tile_image_name = filename.name
@@ -458,6 +458,7 @@ def stitch_crowns(folder: str, shift: int = 1, max_workers=4, logger=None, simpl
     return crowns
 
 def validate_paths(tiles_path, pred_fold, output_path):
+    """Validate the input and output paths."""
     if not os.path.exists(tiles_path) or not os.path.isdir(tiles_path):
         raise FileNotFoundError(f"Tiles path not found: {tiles_path}")
     if not os.path.exists(pred_fold) or not os.path.isdir(pred_fold):
@@ -466,6 +467,7 @@ def validate_paths(tiles_path, pred_fold, output_path):
         os.makedirs(output_path, exist_ok=True)
        
 def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, logger=None):
+    """ Process a single prediction file and return a GeoDataFrame."""
     try:
         # Match JSON file to corresponding TIFF file
         tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))

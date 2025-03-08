@@ -7,19 +7,12 @@ import os
 from pathlib import Path
 from typing import Tuple
 import sys
-import time
-
 import rasterio
 from fiona.model import to_dict
 import fiona
 
-import shapely
-import numba
-import shapely
-from rasterio._base import Affine
 from rasterio.coords import BoundingBox
 from rasterio.enums import Resampling
-from shapely.geometry import shape, Point
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
 
@@ -641,19 +634,21 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
 
     # Step 4: Update features with containment information
     updated_features = []
-    for i, feature in enumerate(features):
-        if polygon_ids[i] not in polygon_ids:
+    j = 0
+    for feature in features:
+        i =  int(feature['properties']['poly_id'])
+        if str(i) not in polygon_ids:
             continue  # Skip invalid features
         new_properties = dict(feature['properties'])
-        new_properties['is_contained'] = bool(cp.any(is_contained[:, i]).get())  # Is this polygon contained?
-        new_properties['num_contained'] = int(num_contained[i])  # How many polygons contain this one?
-
+        new_properties['containment_ratio'] = float(containment_ratios[:, j].max().get())  # Maximum containment ratio
+        new_properties['is_contained'] = bool(cp.any(is_contained[:, j]).get())  # Is this polygon contained?
+        new_properties['num_contained'] = int(num_contained[j])  # How many polygons contain this one?
+        j += 1
         updated_features.append({
             'type': 'Feature',
             'properties': new_properties,
             'geometry': feature['geometry']
         })
-
     return updated_features
 
 
@@ -757,7 +752,7 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
             continue
         preselected_features.append(feature)
 
-    polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds = preprocess_features(preselected_features)
+    #polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds = preprocess_features(preselected_features)
 
     # Call process_containment_features and retrieve attributes
     polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
@@ -765,7 +760,8 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
 
     # Extract containment results
     containment_info = {feature['properties']['poly_id']: {'is_contained': feature['properties']['is_contained'],
-                                                           'num_contained': feature['properties']['num_contained']}
+                                                           'num_contained': feature['properties']['num_contained'],
+                                                           'containment_ratio': feature['properties']['containment_ratio']}
                         for feature in containment_results}
 
     min_ndvi = min_ndvi.get()
@@ -779,7 +775,6 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     for i, feature in enumerate(preselected_features):
         polygon_id = feature['properties']['poly_id']
         containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
-
         if containment_data['num_contained'] >= 3:
             # Case 1: Contains at least three other polygons, discard it
             continue
@@ -834,7 +829,7 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
             print(f"Error rounding coordinates for polygon {polygon_id}: {e}")
 
          # Create a new properties dictionary to avoid direct mutation
-        containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': 0})
+        containment_data = containment_info.get(polygon_id, {'is_contained': False, 'num_contained': -1, 'containment_ratio': 0.0})
         new_properties = dict(feature['properties'])
         new_properties.update({
             'poly_id': polygon_id,
@@ -843,6 +838,7 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
             'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])},  # Ensure JSON compatibility
             'is_contained': containment_data['is_contained'],
             'num_contained': containment_data['num_contained'],
+            'containment_ratio': containment_data['containment_ratio'],
             'MeanNDVI': mean_ndvi[i],
             'VarNDVI': var_ndvi[i],
             'MaxNDVI': max_ndvi[i],
@@ -1015,8 +1011,6 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
     # Filter features based on the provided conditions
     filtered_features = []
     for feature in processed_data["features"]:
-        properties = feature['properties']
-
         # Convert 'Centroid' to a JSON string if it exists
         if 'Centroid' in feature['properties']:
             feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
@@ -1066,16 +1060,15 @@ def process_files_in_directory(directory, height_directory, image_directory, par
         if geojson_match:
             geojson_groups = geojson_match.groups()  # Capture groups for matching
             geojson_concat = ''.join(geojson_groups)
-            for file in Path(directory).rglob("*"):
-                if file.is_file():
-                    file = str(file)
-                    search_match = search_pattern.match(file)
-                    if search_match:
-                        search_groups = search_match.groups()
-                        search_concat = ''.join(search_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
-                        # Check if height groups start with geojson groups
-                        if search_concat == geojson_concat:
-                            return os.path.join(file)
+            for file in os.listdir(directory):
+                search_match = search_pattern.match(file)
+                if search_match:
+                    search_groups = search_match.groups()
+                    search_concat = ''.join(
+                        search_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
+                    # Check if height groups start with geojson groups
+                    if search_concat == geojson_concat:
+                        return os.path.join(directory, file)
         return None
 
     if not parallel:
@@ -1116,40 +1109,3 @@ def process_files_in_directory(directory, height_directory, image_directory, par
             # Ensure all futures complete
             for future in futures:
                 future.result()
-
-
-def profile_code():
-    """
-    Profile the code to analyze performance using cProfile.
-    """
-    import cProfile
-    import pstats
-    import io
-    pr = cProfile.Profile()
-
-    geojson_directory = '/output/geojson_predictions'
-    height_directory = '/data/nDSM_anno'
-
-    pr.enable()
-    process_files_in_directory(geojson_directory, height_directory, parallel=True, filename_pattern=("FDOP20_(\\d+)_(\\d+)_rgbi\\.tif","nDSM_(\\d+)_1km\\.tif"))
-
-    pr.disable()
-
-    s = io.StringIO()
-    # Sort by cumulative time and apply the threshold
-    ps = pstats.Stats(pr, stream=s).sort_stats(pstats.SortKey.CUMULATIVE)
-    ps.print_stats(0.1)  # Only display functions above the cumulative time threshold
-
-    print(s.getvalue())
-
-
-if __name__ == "__main__":
-    profile_code()
-    exit()
-
-    geojson_directory = 'output/geojson_predictions'
-    height_dir = 'data/nDSM'
-    image_directory = 'data/rgb'
-
-    process_files_in_directory(geojson_directory, height_dir, image_directory,
-                               parallel=False)

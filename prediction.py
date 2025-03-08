@@ -12,7 +12,6 @@ from rasterio.mask import mask
 import geopandas as gpd
 from shapely.geometry import box
 from detectron2.engine import DefaultPredictor
-from detectron2.evaluation.coco_evaluation import instances_to_coco_json
 
 from helpers import xy_gpu
 
