@@ -23,7 +23,7 @@ import cupy as cp
 import torch
 
 from config import get_config, Config
-from helpers import ndvi_array_from_rgbi, check_similarity_bounds
+from helpers import ndvi_array_from_rgbi, check_similarity_bounds, exclude_elements_near_border
 
 
 def convert_to_python_types(data):
@@ -492,7 +492,7 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
     ids = list(polygon_dict.keys())
     
     # Convert data to CuPy arrays
-    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids])
+    bboxes = cp.array([polygon_dict[pid].bounds for pid in ids], dtype=cp.float16)
     confidences = cp.array([confidence_scores[pid] for pid in ids], dtype=cp.float16)
     areas = cp.array([id_to_area[pid] for pid in ids], dtype=cp.float16)
     
@@ -676,6 +676,7 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
                 polygon_y_all.append(polygon_y)
             else:
                 print(f'Other type than polygon encountered: {type(polygon)}')
+
             polygon_bounds.append(polygon.bounds)
             ids_all.append(feature['properties']['poly_id'])
             max_points = max(max_points, len(polygon_x))  # Update max_points
@@ -683,27 +684,27 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
         return polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds
 
     def pad_polygon_coords(polygon_coords_all, max_length):
-                """
-                Pads a batch of polygons with NaN values to ensure all have the same length.
+            """
+            Pads a batch of polygons with NaN values to ensure all have the same length.
 
-                Args:
-                    polygon_coords_all (list of cupy.ndarray): List of 1D arrays of polygon coordinates.
-                    max_length (int): The maximum length to which each polygon is padded.
+            Args:
+                polygon_coords_all (list of cupy.ndarray): List of 1D arrays of polygon coordinates.
+                max_length (int): The maximum length to which each polygon is padded.
 
-                Returns:
-                    cupy.ndarray: 2D array where each row represents a padded polygon.
-                """
-                # Calculate the batch size
-                batch_size = len(polygon_coords_all)
+            Returns:
+                cupy.ndarray: 2D array where each row represents a padded polygon.
+            """
+            # Calculate the batch size
+            batch_size = len(polygon_coords_all)
 
-                # Create an empty array filled with NaN of shape (batch_size, max_length)
-                padded_array = cp.full((batch_size, max_length), cp.nan)
+            # Create an empty array filled with NaN of shape (batch_size, max_length)
+            padded_array = cp.full((batch_size, max_length), cp.nan)
 
-                # Fill the padded array with the polygon coordinates
-                for i, coords in enumerate(polygon_coords_all):
-                    padded_array[i, :len(coords)] = cp.array(coords)
+            # Fill the padded array with the polygon coordinates
+            for i, coords in enumerate(polygon_coords_all):
+                padded_array[i, :len(coords)] = cp.array(coords)
 
-                return padded_array
+            return padded_array
 
     polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds = preprocess_features(features)
 
@@ -745,10 +746,15 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     # Preselect features based on the heights and NDVI values to speed up containment processing
     preselected_features = []
     for i, feature in enumerate(features):
-        if heights[i] < config.height_threshold:
+        polygon = shape(feature['geometry'])
+        polygon_is_at_border = exclude_elements_near_border(polygon.bounds, ndvi_bounds)
+        if polygon_is_at_border:
+            continue
+
+        if heights[i] < config.height_threshold and heights[i] > -1.0:
             # Height is too small, discard it
             continue
-        if mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold:
+        if (mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold) and mean_ndvi[i] > -1.0:
             continue
         preselected_features.append(feature)
 
@@ -797,10 +803,10 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
                 if var_ndvi[i] < var_ndvi[features.index(other_polygon)]:
                     selected_features.append([i, feature])
                 else:
-                    selected_features.append([int(other_polygon_id), other_polygon])            
+                    selected_features.append([int(other_polygon_id), other_polygon])
             # Case 3.2: Fallback Big area
             elif id_to_area.get(polygon_id, 0) > id_to_area.get(int(other_polygon_id), 0):
-                selected_features.append([i, feature])            
+                selected_features.append([i, feature])
         else:
             # Case 4: Does not contain anything, no problem, we keep it
             selected_features.append([i, feature])
@@ -1050,25 +1056,30 @@ def process_files_in_directory(directory, height_directory, image_directory, par
         height_data_pattern = "(\\d+)\\.tif"
     if image_pattern is None:
         image_pattern = "(\\d+)\\.tif"
+
+    image_merged_pattern = Config().image_merged_regex
+    height_merged_pattern = Config().height_data_merged_regex
+    image_merged_pattern = re.compile(image_merged_pattern)
+    height_merged_pattern = re.compile(height_merged_pattern)
+
     image_pattern = re.compile(image_pattern)
     height_data_pattern = re.compile(height_data_pattern)
 
     def find_matching_file(base_name, geojson_pattern, search_pattern, directory):
         """Find a matching height data file based on regex groups from the base name."""
         geojson_match = geojson_pattern.match(base_name + ".tif")
-        print("BASENAME ", base_name, geojson_match, search_pattern, directory, filename_pattern)
         if geojson_match:
             geojson_groups = geojson_match.groups()  # Capture groups for matching
             geojson_concat = ''.join(geojson_groups)
-            for file in os.listdir(directory):
-                search_match = search_pattern.match(file)
-                if search_match:
-                    search_groups = search_match.groups()
-                    search_concat = ''.join(
-                        search_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
-                    # Check if height groups start with geojson groups
-                    if search_concat == geojson_concat:
-                        return os.path.join(directory, file)
+            for root, _, files in os.walk(directory):
+                for file in files:
+                    search_match = search_pattern.match(file)
+                    if search_match:
+                        search_groups = search_match.groups()
+                        search_concat = ''.join(search_groups[:len(geojson_groups)])  # Concatenate height groups for comparison
+                        # Check if height groups start with geojson groups
+                        if search_concat == geojson_concat:
+                            return os.path.join(root, file)
         return None
 
     if not parallel:
@@ -1076,8 +1087,15 @@ def process_files_in_directory(directory, height_directory, image_directory, par
         for filename in geojson_files:
             file_path = os.path.join(directory, filename)
             base_name = os.path.splitext(os.path.basename(filename))[0]
-            height_file_path = find_matching_file(base_name, image_pattern, height_data_pattern, height_directory)#find_matching_height_file(base_name)
-            image_file_path = find_matching_file(base_name, image_pattern, image_pattern, image_directory)#find_matching_image_file(base_name)
+            height_file_path = find_matching_file(base_name, image_pattern, height_data_pattern, height_directory)
+            image_file_path = find_matching_file(base_name, image_pattern, image_pattern, image_directory)
+
+            if height_file_path is None or image_file_path is None:
+                height_file_path = find_matching_file(base_name, image_merged_pattern, height_merged_pattern,
+                                                      height_directory)
+                image_file_path = find_matching_file(base_name, image_merged_pattern, image_merged_pattern,
+                                                     image_directory)
+
 
             if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
