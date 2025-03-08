@@ -302,7 +302,7 @@ def preprocess_files(config):
 
     merged_directory = config["merged_path"]
 
-    def save_cropped_images(images_path):
+    def save_cropped_images(images_path, rgbi=True):
         """
         Save the cropped images based on the neighboring images.
 
@@ -311,20 +311,19 @@ def preprocess_files(config):
         """
         cropped_image_names = []
         for f in images_path:
-            uncropped_img_filenames = [os.path.basename(path) for path in images_path]
             left, right, up, down = retrieve_neighboring_image_filenames(f, images_path)
 
             directory = os.path.dirname(f)
             result_directory = f"{directory}/{merged_directory}"
             os.makedirs(result_directory, exist_ok=True)
             f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
+            f_name_end = os.path.basename(f).replace(".tif", "").split("_")[-1]
             # f_x_coord, f_y_coord = tif_geoinfo(f)
             transform, crs, width, height = tif_geoinfo(f)
             f_x_coord, f_y_coord = transform.c, transform.f
 
             # We only look at the right and the bottom neighbors so that we don't process the same cropped image twice
             if right is not None:
-                # right_x_coord, right_y_coord = filename_geoinfo(f"{right}")
                 transform, crs, width, height = tif_geoinfo(right)
                 right_x_coord, right_y_coord = transform.c, transform.f
 
@@ -335,7 +334,10 @@ def preprocess_files(config):
                     with rasterio.MemoryFile() as memfile:
                         with memfile.open(**merged_img_meta) as merged_src:
                             merged_src.write(merged_img)
-                            output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}__{round(right_x_coord)}_{round(right_y_coord)}__.tif"
+                            if rgbi:
+                                output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(right_x_coord)}_{round(right_y_coord)}_{f_name_end}.tif"
+                            else:
+                                output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(right_x_coord)}{round(right_y_coord)}_{f_name_end}.tif"
                             # Perform cropping here
                             cropped_data, cropped_meta = crop_image(merged_src,
                                                                     (config["tile_width"] + 2 * config["buffer"]) *
@@ -348,7 +350,6 @@ def preprocess_files(config):
                             cropped_image_names.append(f"{result_directory}/{output_filename}")
 
             if down is not None:
-                # down_x_coord, down_y_coord = filename_geoinfo(f"{down}")
                 transform, crs, width, height = tif_geoinfo(down)
                 down_x_coord, down_y_coord = transform.c, transform.f
 
@@ -359,7 +360,10 @@ def preprocess_files(config):
                     with rasterio.MemoryFile() as memfile:
                         with memfile.open(**merged_img_meta) as merged_src:
                             merged_src.write(merged_img)
-                            output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}__{round(down_x_coord)}_{round(down_y_coord)}__.tif"
+                            if rgbi:
+                                output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(down_x_coord)}_{round(down_y_coord)}_{f_name_end}.tif"
+                            else:
+                                output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(down_x_coord)}{round(down_y_coord)}_{f_name_end}.tif"
                             # Perform cropping here
                             cropped_data, cropped_meta = crop_image(merged_src, merged_src.width,
                                                                     (config["tile_height"] + 2 * config["buffer"]) *
@@ -374,9 +378,9 @@ def preprocess_files(config):
 
     # Here we merge and crop neighboring images
     try:
-        cropped_image_filenames = save_cropped_images(images_paths)
+        cropped_image_filenames = save_cropped_images(images_paths, rgbi=True)
         print("Cropped images: ", cropped_image_filenames)
-        cropped_height_filenames = save_cropped_images(height_paths)
+        cropped_height_filenames = save_cropped_images(height_paths, rgbi=False)
         print("Cropped height data: ", cropped_height_filenames)
 
         # Include the image paths of the cropped images to the list of images to be processed
