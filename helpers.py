@@ -490,10 +490,8 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         # Process each prediction
         features = []
         for crown_data in data:
-            unreshaped_coords = None
             if 'polygon_coords' in crown_data:
                 coords = np.array(crown_data["polygon_coords"]).reshape(-1, 2)
-                unreshaped_coords = np.array(crown_data["polygon_coords"])
             else:
                 if "bbox" in crown_data:
                     bbox = np.array(crown_data["bbox"])
@@ -505,14 +503,9 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
                     continue
                 crown_data["polygon_coords"] = polygon_coords
                 coords = np.array(polygon_coords).reshape(-1, 2)
-                unreshaped_coords = np.array(polygon_coords)
             polygon = Polygon(coords)
 
             # Check if it's near the tile border
-            # TODO: This is buggy
-            # is_inside = exclude_elements_near_border(unreshaped_coords, bounding_box)
-            # if is_inside:
-            #     features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
             features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
 
         gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
@@ -530,20 +523,22 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         return None
 
 
-def exclude_elements_near_border(filtered_gdf, bounding_box):
-    eps = 20
+def exclude_elements_near_border(polygon, bounding_box):
+    eps = 2
 
-    minx = bounding_box.geometry.bounds.minx.iloc[0] + eps
-    miny = bounding_box.geometry.bounds.miny.iloc[0] + eps
-    maxx = bounding_box.geometry.bounds.maxx.iloc[0] - eps
-    maxy = bounding_box.geometry.bounds.maxy.iloc[0] - eps
+    pol_x = polygon[0]
+    pol_y = polygon[1]
+    pol_width = polygon[2]
+    pol_height = polygon[3]
 
-    x_coords = filtered_gdf[:, :, 0]
-    y_coords = filtered_gdf[:, :, 1]
+    minx = bounding_box.left + eps
+    miny = bounding_box.bottom + eps
+    maxx = bounding_box.right - eps
+    maxy = bounding_box.top - eps
 
-    if (np.array(x_coords[0]) < minx).any() or (np.array(x_coords[0]) > maxx).any() or (np.array(y_coords[0]) < miny).any() or (np.array(y_coords[0]) > maxy).any():
-        return False
-    return True
+    if (pol_x < minx) or (pol_width > maxx) or (pol_y < miny) or (pol_height > maxy):
+        return True
+    return False
 
 
 def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
@@ -1068,7 +1063,7 @@ def retrieve_neighboring_image_filenames(filename, other_filenames):
         if abs(other_transform.f - (y - (height*other_transform.a))) < eps and abs(other_transform.c - x) < eps:
             down = other
 
-    return (left, right, up, down)
+    return left, right, up, down
 
 
 def merge_images(src1, src2):
