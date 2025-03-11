@@ -273,25 +273,15 @@ def filename_geoinfo(filename):
 
     Copied directly from detectree2 
     """
-    if os.path.splitext(filename)[1] == ".tif":
-        parts = os.path.basename(filename).replace(".tif", "").split("_")
+    parts = os.path.basename(filename).replace(".geojson", "").replace(".json", "").replace(".gpkg", "").split("_")
 
-        try:
-            x_coord = int(parts[1])
-            y_coord = int(parts[2])
-            return x_coord, y_coord
-        except Exception as e:
-            raise Exception("Filename not compatible.", e)
-    else:
-        parts = os.path.basename(filename).replace(".geojson", "").replace(".json", "").replace(".gpkg", "").split("_")
-
-        parts = [int(part) for part in parts[-5:]]  # type: ignore
-        minx = parts[0]
-        miny = parts[1]
-        width = parts[2]
-        buffer = parts[3]
-        crs = parts[4]
-        return (minx, miny, width, buffer, crs)
+    parts = [int(part) for part in parts[-5:]]  # type: ignore
+    minx = parts[0]
+    miny = parts[1]
+    width = parts[2]
+    buffer = parts[3]
+    crs = parts[4]
+    return (minx, miny, width, buffer, crs)
 
 
 def tif_geoinfo(filename):
