@@ -1,17 +1,18 @@
 # File handling
-image_directory: "data/rgb"   # Path to the RGB Files
-height_data_path: "data/nDSM" # Path to the corresponding nDSM Fiels
-
-combined_model: "data/model_combined.pth"   # or specify the urban_model and forrest_model separately
-urban_model: "data/model_combined.pth"      # optional if combined_model is not used
-forrest_model: "data/model_forrest.pth"     # optional if combined_model is not used
-forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # optional if combined_model is not used
-
-output_directory: "output"  # Path to output directory, default: ./output
-tiles_path: "tiles"         # Path to intermediate tile directory, default: ./tiles
-
-image_regex: "FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"  # Regex for extracting identifier out of filepath, to match image and height, default: ".*_fdop.tif"
-height_data_regex: "nDSM_(\\d+)_1km\\.tif"      # Regex for extracting identifier out of filepath, to match image and height, default: ".*_nDSM.tif"
+#image_directory: "data/rgb_test" #"data/locations/rgb"
+#height_data_path: "data/nDSM_test"  #"data/nDSM"
+#image_regex: "FDOP20_(\\d+)_rgbi_epsg25832.tif" # examples "FDOP20_(\d+)_rgbi\.tif"  # default: ".*_fdop.tif"
+image_directory: "data/locations/rgb"
+height_data_path: "data/locations/heights"
+#combined_model: "data/model_combined.pth"  # I) make combined prediction or specify the urban_model and forrest_model separately
+urban_model: "data/model_combined.pth"  # II) specify the urban model
+forrest_model: "data/model_forrest.pth"  # II) specify the forrest model
+forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # II) specify the forrest outline
+output_directory: "output"  # default: ./output
+tiles_path: "tiles"  # default: ./tiles
+# continue_path: "/home/jonas/tree_detection/tree_detection/output/continue.yml"  # default: ./output/continue.yml
+image_regex: "FDOP20_(\\d+)_(\\d+)_rgbi\\.tif" # examples "FDOP20_(\d+)_rgbi\.tif"  # default: ".*_fdop.tif"
+height_data_regex: "nDSM_(\\d+)_1km\\.tif"  # default: ".*_nDSM.tif"
 
 # Tile parameters
 tile_width: 50    # default: 50
@@ -21,16 +22,14 @@ batch_size: 10    # Predictions Batch size, typically rule of thumb 1 per GB on 
 
 # Post-processing files
 exclude_files:  # default: []
-  - "data/BW-Gewaesser/Gewaesserflaechen.shp" # Shapefiles of different objects, that can be occluded, e.g. bodies of water or building outlines.
+  - "data/BW-Gewaesser/Gewaesserflaechen.shp"
 
-# Post-processing parameters
-ndvi_scaling_factor: 0.2    # default: 0.2, as the NDVI is 5x larger than the Height data array. We want both to be the same scale so that we can process them together.
-height_scaling_factor: 1.0  # default 1.0
-confidence_threshold: 0.3   # default: 0.3 
-containment_threshold: 0.6  # default: 0.9
-height_threshold: 3         # default: 3
-ndvi_mean_threshold: 0.15   # default: 0.05, very conservative, but should be safest for most cases
-ndvi_var_threshold: 0.05    # default: 0.1
+ndvi_scaling_factor: 0.2 # default: 0.2, resolution dependent parameter for NDVI calculation
+height_scaling_factor: 1.0 # default 1.0
+
+confidence_threshold: 0.3  # default: 0.3 
+containment_threshold: 0.75  # default: 0.9
+height_threshold: 3  # default: 3
 
 # Stiching & Cleaning parameters
 iou_threshold: 0.6                    # default: 0.5
@@ -42,6 +41,8 @@ parallel: True  # default: true
 num_workers: 5  # default: 10
 
 # Logging and debugging
-verbose: False            # default: false
-debug: False              # default: false
+verbose: False  # default: false
+debug: True  # default: false
 keep_intermediate: False  # default: false
+ndvi_mean_threshold: 0.1
+ndvi_var_threshold: 0.1
