@@ -8,7 +8,7 @@ The config can either be given as a YAML file or it can be hardcoded as director
 
 The primary functions to be used are in the main file, the process_files method is designed self contained and works only with the given parameters, if you choose to rely on the single functions to have more flexibility, you can also use preprocess_files, predict_tiles, and postprocess_files. In Order for this to work, the corresponding data from the previous steps should be made available before calling any of these methods.
 
-The program can be executed with either one or two models based on whats given in the config, if two models are choose a 
+The program can be executed with either one or two models based on whats given in the config, if two models are choosen also a segmentation boundary as shape needs to be provided. 
 
 ## Additional Data 
 Additional data such as models, example images and height maps, training datasets can be found [here](https://placeholder.com/).
