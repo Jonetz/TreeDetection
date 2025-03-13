@@ -50,7 +50,7 @@ Illustration of the different steps during training and inference, that can be a
 ## Supplementary Data 
 We provide supplementary data for training the models, segmentation of the box annotations to more fine grained annotations, generation of autolabels, and model evaluation.
 
-### Viusal Samples
+### Visual Samples
 Sample in Baden-Württemberg, Southern Germany
 ![Sample in Baden-Württemberg, Southern Germany](supplementary/imgs/sample1.jpg)
 
