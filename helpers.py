@@ -1,43 +1,32 @@
 import asyncio
-import os
-import sys
-
-import aiofiles
-import cv2
 import json
-
-import fiona
-import numpy as np
-import warnings
-import traceback
+import os
 import shutil
-import numba as nb
-
-import geopandas as gpd
-import pandas as pd
-
+import traceback
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import cupy as cp
+import cv2
+import geopandas as gpd
+import numba as nb
+import numpy as np
+import pandas as pd
 import rasterio
-from fiona.model import to_dict
+from affine import Affine
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
-from numpy.f2py.auxfuncs import throw_error
+from pycocotools import mask as mask_util
 from rasterio.coords import BoundingBox
+from rasterio.crs import CRS
 from rasterio.merge import merge
 from rasterio.transform import xy
-from rasterio.crs import CRS
 from rasterio.windows import Window
-from shapely.geometry import box, shape, Polygon
 from shapely.errors import ShapelyError
-
-from pycocotools import mask as mask_util
-
-from concurrent.futures import ThreadPoolExecutor
-from affine import Affine
-
+from shapely.geometry import Polygon
 from shapely.geometry import box, shape
-import cupy as cp
+
 
 def exclude_outlines(config):
     """
@@ -523,20 +512,18 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         return None
 
 
-def exclude_elements_near_border(polygon, bounding_box):
-    eps = 2
-
+def exclude_elements_near_border(polygon, bounding_box, eps):
     pol_x = polygon[0]
     pol_y = polygon[1]
-    pol_width = polygon[2]
-    pol_height = polygon[3]
+    pol_max_x = polygon[2]
+    pol_max_y = polygon[3]
 
     minx = bounding_box.left + eps
     miny = bounding_box.bottom + eps
     maxx = bounding_box.right - eps
     maxy = bounding_box.top - eps
 
-    if (pol_x < minx) or (pol_width > maxx) or (pol_y < miny) or (pol_height > maxy):
+    if (pol_x < minx) or (pol_max_x > maxx) or (pol_y < miny) or (pol_max_y > maxy):
         return True
     return False
 

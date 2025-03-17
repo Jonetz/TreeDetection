@@ -1,28 +1,22 @@
+import re
+import json
 import os
 import re
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
-import json
-import os
-from pathlib import Path
-from typing import Tuple
-import sys
-import rasterio
-from fiona.model import to_dict
+import cupy as cp
 import fiona
-
+import numpy as np
+import rasterio
+import torch
+from fiona.model import to_dict
 from rasterio.coords import BoundingBox
 from rasterio.enums import Resampling
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
 
-from concurrent.futures import ThreadPoolExecutor
-
-import numpy as np
-import cupy as cp
-import torch
-
-from config import get_config, Config
+from config import Config
 from helpers import ndvi_array_from_rgbi, check_similarity_bounds, exclude_elements_near_border
 
 
@@ -652,7 +646,7 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
     return updated_features
 
 
-def process_features(features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds):
+def process_features(features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds, ndvi_scaling_x, ndvi_scaling_y):
     config = Config()
 
     def preprocess_features(features):
@@ -747,9 +741,30 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     preselected_features = []
     for i, feature in enumerate(features):
         polygon = shape(feature['geometry'])
-        polygon_is_at_border = exclude_elements_near_border(polygon.bounds, ndvi_bounds)
+        polygon_is_at_border = exclude_elements_near_border(polygon.bounds, ndvi_bounds, eps=1.5)
         if polygon_is_at_border:
             continue
+
+        image_width = ndvi_data.shape[1]
+        image_height = ndvi_data.shape[0]
+
+        vertical_merged_image_height = ((config.tile_height + 2 * config.buffer) * config.overlapping_tiles_height) * ndvi_scaling_y
+        horizontal_merged_image_width = ((config.tile_width + 2 * config.buffer) * config.overlapping_tiles_width) * ndvi_scaling_x
+
+        if not (image_height == vertical_merged_image_height or image_width == horizontal_merged_image_width):
+            # Here we want to remove everything that is inside the borders, where the trees are covered by the overlap entirely (! entirely is important here)
+            right_border = ndvi_bounds.right - (horizontal_merged_image_width / 2.0)
+            left_border = ndvi_bounds.left + (horizontal_merged_image_width / 2.0)
+            top_border = ndvi_bounds.top - (vertical_merged_image_height / 2.0)
+            bottom_border = ndvi_bounds.bottom + (vertical_merged_image_height / 2.0)
+
+            polyon_is_entirely_inside_top_overlap = top_border < polygon.bounds[1]
+            polyon_is_entirely_inside_bottom_overlap = bottom_border > polygon.bounds[3]
+            polyon_is_entirely_inside_left_overlap = left_border > polygon.bounds[2]
+            polyon_is_entirely_inside_right_overlap = right_border < polygon.bounds[0]
+
+            if polyon_is_entirely_inside_top_overlap or polyon_is_entirely_inside_bottom_overlap or polyon_is_entirely_inside_left_overlap or polyon_is_entirely_inside_right_overlap:
+                continue
 
         if heights[i] < config.height_threshold and heights[i] > -1.0:
             # Height is too small, discard it
@@ -944,6 +959,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
             resampling=Resampling.bilinear
         )
         ndvi_data = ndvi_array_from_rgbi(rgbi_data)
+        orig_transform = src.transform
         ndvi_transform = src.transform * src.transform.scale((src.width / ndvi_data.shape[-1]), (src.height / ndvi_data.shape[-2]))
         ndvi_bounds = src.bounds
 
@@ -952,7 +968,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
     filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
 
     # 4. Filter polygons more complex based on containment and calculate height data for each polygon
-    new_features = process_features(filtered_features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds)
+    new_features = process_features(filtered_features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds, abs(orig_transform.a), abs(orig_transform.e))
     data['features'] = new_features
     return data
 

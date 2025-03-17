@@ -1,14 +1,13 @@
 import asyncio
-import time
-from pathlib import Path
-import sys
+import datetime
 import os
 import re
+import sys
+import time
 import warnings
-import datetime
+from pathlib import Path
 
 import rasterio
-from rasterio.windows import Window
 
 from prediction import Predictor
 
@@ -16,8 +15,7 @@ from prediction import Predictor
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg
 from tiling import tile_data
-from helpers import process_and_stitch_predictions, fuse_predictions, delete_contents, \
-    retrieve_neighboring_image_filenames, merge_images, filename_geoinfo, crop_image, tif_geoinfo
+from helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
 from helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
 from post_performant import process_files_in_directory
 
@@ -395,8 +393,6 @@ def preprocess_files(config):
         if identifier not in height_data_identifiers:
             warnings.warn(f"Warning: No corresponding height data found for image file {image_path}")
             missing_height_data.append(image_path)
-
-    print(image_identifiers.items())
 
     if not images_paths:
         raise FileNotFoundError(
