@@ -59,6 +59,7 @@ def postprocess_files(config):
             timestamp_directory = f"{config['output_directory']}/{timestamp}"
             os.makedirs(timestamp_directory, exist_ok=True)
             crowns.to_file(os.path.join(timestamp_directory, filename_without_processed))
+            crowns.to_file(os.path.join(config["output_directory"], filename_without_processed))
         else:
             crowns.to_file(os.path.join(config["output_directory"], filename_without_processed))
 
@@ -300,98 +301,98 @@ def preprocess_files(config):
             # Smash all groups together without any separator
             height_data_identifiers["".join(match.groups())] = f
 
-    # Filter out images that have already been processed (can be identified by the __ in the filename)
-    images_paths = [path for path in images_paths if "__" not in path]
-    height_paths = [path for path in height_paths if "__" not in path]
+    if config["use_overlap"]:
+        # Filter out images that have already been processed (can be identified by the __ in the filename)
+        images_paths = [path for path in images_paths if "__" not in path]
+        height_paths = [path for path in height_paths if "__" not in path]
 
-    merged_directory = config["merged_path"]
+        merged_directory = config["merged_path"]
+        def save_cropped_images(images_path, rgbi=True):
+            """
+            Save the cropped images based on the neighboring images.
 
-    def save_cropped_images(images_path, rgbi=True):
-        """
-        Save the cropped images based on the neighboring images.
+            Args:
+                images_path (list): List of image paths.
+            """
+            cropped_image_names = []
+            for f in images_path:
+                left, right, up, down = retrieve_neighboring_image_filenames(f, images_path)
 
-        Args:
-            images_path (list): List of image paths.
-        """
-        cropped_image_names = []
-        for f in images_path:
-            left, right, up, down = retrieve_neighboring_image_filenames(f, images_path)
+                directory = os.path.dirname(f)
+                result_directory = f"{directory}/{merged_directory}"
+                os.makedirs(result_directory, exist_ok=True)
+                f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
+                f_name_end = os.path.basename(f).replace(".tif", "").split("_")[-1]
+                # f_x_coord, f_y_coord = tif_geoinfo(f)
+                transform, crs, width, height = tif_geoinfo(f)
+                f_x_coord, f_y_coord = transform.c, transform.f
 
-            directory = os.path.dirname(f)
-            result_directory = f"{directory}/{merged_directory}"
-            os.makedirs(result_directory, exist_ok=True)
-            f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
-            f_name_end = os.path.basename(f).replace(".tif", "").split("_")[-1]
-            # f_x_coord, f_y_coord = tif_geoinfo(f)
-            transform, crs, width, height = tif_geoinfo(f)
-            f_x_coord, f_y_coord = transform.c, transform.f
+                # We only look at the right and the bottom neighbors so that we don't process the same cropped image twice
+                if right is not None:
+                    transform, crs, width, height = tif_geoinfo(right)
+                    right_x_coord, right_y_coord = transform.c, transform.f
 
-            # We only look at the right and the bottom neighbors so that we don't process the same cropped image twice
-            if right is not None:
-                transform, crs, width, height = tif_geoinfo(right)
-                right_x_coord, right_y_coord = transform.c, transform.f
+                    with rasterio.open(f) as left_img, rasterio.open(f"{right}") as right_img:
+                        merged_img, merged_img_meta = merge_images(left_img, right_img)
 
-                with rasterio.open(f) as left_img, rasterio.open(f"{right}") as right_img:
-                    merged_img, merged_img_meta = merge_images(left_img, right_img)
+                        # Write the merged file only to memory for faster processing
+                        with rasterio.MemoryFile() as memfile:
+                            with memfile.open(**merged_img_meta) as merged_src:
+                                merged_src.write(merged_img)
+                                if rgbi:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(right_x_coord)}_{round(right_y_coord)}_{f_name_end}.tif"
+                                else:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(right_x_coord)}{round(right_y_coord)}_{f_name_end}.tif"
+                                # Perform cropping here
+                                cropped_data, cropped_meta = crop_image(merged_src,
+                                                                        (config["tile_width"] + 2 * config["buffer"]) *
+                                                                        config["overlapping_tiles_width"],
+                                                                        merged_src.height)
+                                # Save the cropped image
+                                with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
+                                    dest.write(cropped_data)
 
-                    # Write the merged file only to memory for faster processing
-                    with rasterio.MemoryFile() as memfile:
-                        with memfile.open(**merged_img_meta) as merged_src:
-                            merged_src.write(merged_img)
-                            if rgbi:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(right_x_coord)}_{round(right_y_coord)}_{f_name_end}.tif"
-                            else:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(right_x_coord)}{round(right_y_coord)}_{f_name_end}.tif"
-                            # Perform cropping here
-                            cropped_data, cropped_meta = crop_image(merged_src,
-                                                                    (config["tile_width"] + 2 * config["buffer"]) *
-                                                                    config["overlapping_tiles_width"],
-                                                                    merged_src.height)
-                            # Save the cropped image
-                            with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
-                                dest.write(cropped_data)
+                                cropped_image_names.append(f"{result_directory}/{output_filename}")
 
-                            cropped_image_names.append(f"{result_directory}/{output_filename}")
+                if down is not None:
+                    transform, crs, width, height = tif_geoinfo(down)
+                    down_x_coord, down_y_coord = transform.c, transform.f
 
-            if down is not None:
-                transform, crs, width, height = tif_geoinfo(down)
-                down_x_coord, down_y_coord = transform.c, transform.f
+                    with rasterio.open(f) as top_img, rasterio.open(f"{down}") as bottom_img:
+                        merged_img, merged_img_meta = merge_images(top_img, bottom_img)
 
-                with rasterio.open(f) as top_img, rasterio.open(f"{down}") as bottom_img:
-                    merged_img, merged_img_meta = merge_images(top_img, bottom_img)
+                        # Write the merged file only to memory for faster processing
+                        with rasterio.MemoryFile() as memfile:
+                            with memfile.open(**merged_img_meta) as merged_src:
+                                merged_src.write(merged_img)
+                                if rgbi:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(down_x_coord)}_{round(down_y_coord)}_{f_name_end}.tif"
+                                else:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(down_x_coord)}{round(down_y_coord)}_{f_name_end}.tif"
+                                # Perform cropping here
+                                cropped_data, cropped_meta = crop_image(merged_src, merged_src.width,
+                                                                        (config["tile_height"] + 2 * config["buffer"]) *
+                                                                        config["overlapping_tiles_height"])
+                                # Save the cropped image
+                                with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
+                                    dest.write(cropped_data)
 
-                    # Write the merged file only to memory for faster processing
-                    with rasterio.MemoryFile() as memfile:
-                        with memfile.open(**merged_img_meta) as merged_src:
-                            merged_src.write(merged_img)
-                            if rgbi:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(down_x_coord)}_{round(down_y_coord)}_{f_name_end}.tif"
-                            else:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(down_x_coord)}{round(down_y_coord)}_{f_name_end}.tif"
-                            # Perform cropping here
-                            cropped_data, cropped_meta = crop_image(merged_src, merged_src.width,
-                                                                    (config["tile_height"] + 2 * config["buffer"]) *
-                                                                    config["overlapping_tiles_height"])
-                            # Save the cropped image
-                            with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
-                                dest.write(cropped_data)
+                                cropped_image_names.append(f"{result_directory}/{output_filename}")
 
-                            cropped_image_names.append(f"{result_directory}/{output_filename}")
+            return cropped_image_names
 
-        return cropped_image_names
+        # Here we merge and crop neighboring images
+        try:
+            cropped_image_filenames = save_cropped_images(images_paths, rgbi=True)
+            print("Cropped images: ", cropped_image_filenames)
+            cropped_height_filenames = save_cropped_images(height_paths, rgbi=False)
+            print("Cropped height data: ", cropped_height_filenames)
 
-    # Here we merge and crop neighboring images
-    try:
-        cropped_image_filenames = save_cropped_images(images_paths, rgbi=True)
-        print("Cropped images: ", cropped_image_filenames)
-        cropped_height_filenames = save_cropped_images(height_paths, rgbi=False)
-        print("Cropped height data: ", cropped_height_filenames)
-
-        # Include the image paths of the cropped images to the list of images to be processed
-        images_paths.extend(cropped_image_filenames)
-        height_paths.extend(cropped_height_filenames)
-    except Exception as e:
-        logger.error(f"Error merging and cropping images: {e}")
+            # Include the image paths of the cropped images to the list of images to be processed
+            images_paths.extend(cropped_image_filenames)
+            height_paths.extend(cropped_height_filenames)
+        except Exception as e:
+            logger.error(f"Error merging and cropping images: {e}")
 
     # Validate height data availability
     missing_height_data = []
@@ -426,13 +427,13 @@ def process_files(config):
 
     start = time.time()
     # Read the files and tile them
-    #preprocess_files(config)
+    # preprocess_files(config)
     end = time.time()
     preprocess_files_duration = end - start
 
     start = time.time()
     # Predict the tiles
-    #predict_tiles(config)
+    # predict_tiles(config)
     end = time.time()
     predict_tiles_duration = end - start
 
