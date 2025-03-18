@@ -144,7 +144,6 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
     # Extract height data subset based on bounding box
     subset = height_data[min_col:max_col + 1, min_row:max_row + 1]
     if subset.size == 0:
-        print("Error: The subset of height data is empty.")
         return -1, None    
 
     # Prepare points (x, y) for batch processing
@@ -193,7 +192,6 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
 
         # Handle empty result (fallback to centroid)
         if inside_heights.size == 0:
-            print(f"TODO No height points found within polygon {i}. Implementing fallback to centroid.")
             max_coordinates[i] = cp.array([-1, -1])
             max_heights[i] = -1  # Placeholder value, can be adjusted
         else:
@@ -238,7 +236,6 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
     # Extract height data subset based on bounding box
     subset = ndvi_data[min_col:max_col + 1, min_row:max_row + 1]
     if subset.size == 0:
-        print("Error: The subset of height data is empty.")
         return -1, None
 
     # Prepare points (x, y) for batch processing
@@ -289,7 +286,6 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
 
         
         if inside_ndvi.shape[0] == 0:
-            print(f"TODO No NDVI points found within polygon {i}. Implementing fallback to centroid.")
             min_ndvi_values[i] = -1
             max_ndvi_values[i] = -1
             mean_ndvi_values[i] = -1
@@ -344,7 +340,6 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
     height_subset = height_data[min_row:max_row + 1, min_col:max_col + 1]
 
     if ndvi_subset.size == 0:
-        print("Error: The subset of height data is empty.")
         return -1, None
 
     # Prepare points (x, y) for batch processing
@@ -406,7 +401,6 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
         inside_coords = np.column_stack([x_coords_gpu[inside_mask], y_coords_gpu[inside_mask]])
 
         if inside_ndvi.shape[0] == 0:
-            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
             min_ndvi_values[i] = -1
             max_ndvi_values[i] = -1
             mean_ndvi_values[i] = -1
@@ -425,7 +419,6 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
             var_ndvi_values[i] = var_ndvi
 
         if inside_heights.size == 0:
-            print(f"TODO No points found within polygon {i}. Implementing fallback to centroid.")
             max_coordinates[i] = cp.array([-1, -1])
             max_heights[i] = -1  # Placeholder value, can be adjusted
         else:
