@@ -1,12 +1,13 @@
 
-import yaml
-import os
-import torch
 import logging
+import os
 from datetime import datetime
 
-from detectron2.config import get_cfg
+import torch
+import yaml
 from detectron2 import model_zoo
+from detectron2.config import get_cfg
+
 
 class Config:
     _instance = None
@@ -151,6 +152,13 @@ def get_config(config_path: str):
     config["buffer"] = config.get("buffer", 20)
     config["batch_size"] = config.get("batch_size", 10)
 
+    # Overlapping tiles
+    config["use_overlap"] = config.get("use_overlap", True)
+    config["overlapping_tiles_width"] = config.get("overlapping_tiles_width", 3)
+    config["overlapping_tiles_height"] = config.get("overlapping_tiles_height", 3)
+    config["merged_path"] = config.get("merged_path", "merged")
+
+
     # 4. Check the post-processing parameters
     # Stitching
     config['iou_threshold'] = config.get('iou_threshold', 0.5)
@@ -171,6 +179,7 @@ def get_config(config_path: str):
     config["debug"] = config.get("debug", False)
     config["logger"] = setup_logging(os.path.join(config["output_directory"], "logs"), config["debug"])
     config["keep_intermediate"] = config.get("keep_intermediate", False)
+    config["timestamped_output_directory"] = config.get("timestamped_output_directory", False)
     config["simplify_tolerance"] = config.get("simplify_tolerance", 0.2)
 
     config_obj = Config()

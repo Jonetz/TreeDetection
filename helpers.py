@@ -1,42 +1,40 @@
 import asyncio
-import os
-import cv2
 import json
-import numpy as np
-import warnings
-import traceback
+import os
 import shutil
-import numba as nb
-
-import geopandas as gpd
-import pandas as pd
-
+import traceback
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import cupy as cp
+import cv2
+import geopandas as gpd
+import numba as nb
+import numpy as np
+import pandas as pd
 import rasterio
+from affine import Affine
 from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
-from rasterio.coords import BoundingBox
-from rasterio.transform import xy
-from rasterio.crs import CRS
-from shapely.geometry import box, shape, Polygon
-from shapely.errors import ShapelyError
-
 from pycocotools import mask as mask_util
-
-from concurrent.futures import ThreadPoolExecutor
-from affine import Affine
-
+from rasterio.coords import BoundingBox
+from rasterio.crs import CRS
+from rasterio.merge import merge
+from rasterio.transform import xy
+from rasterio.windows import Window
+from shapely.errors import ShapelyError
+from shapely.geometry import Polygon
 from shapely.geometry import box, shape
-import cupy as cp
+
 
 def exclude_outlines(config):
     """
     Exclude crowns that are within the outlines of the exclude files.
-    
+
     Warning: If the exclude outline contains a lot of shapes it can take a long time to process or result in Out-of-memory errors.
     """
-    
+
     for outline in config.get('exclude_files', []):
         exclude_outline = gpd.read_file(outline)
 
@@ -275,6 +273,11 @@ def filename_geoinfo(filename):
     return (minx, miny, width, buffer, crs)
 
 
+def tif_geoinfo(filename):
+    with rasterio.open(filename, 'r') as source:
+        return source.transform, source.crs, source.width, source.height
+
+
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
     """Generate bounding box from geographic specifications.
 
@@ -460,7 +463,7 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         # Load predictions
         with open(file, "r") as pred_file:
             data = json.load(pred_file)
-        
+
         # Process each prediction
         features = []
         for crown_data in data:
@@ -476,16 +479,17 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
                 if not polygon_coords:
                     continue
                 crown_data["polygon_coords"] = polygon_coords
-                coords = np.array(polygon_coords).reshape(-1, 2)            
+                coords = np.array(polygon_coords).reshape(-1, 2)
             polygon = Polygon(coords)
 
+            # Check if it's near the tile border
             features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
-        
+
         gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
         
         if simplify_tolerance > 0:
             gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
-        
+
         bounding_box = box_filter(tifpath, shift)
         filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
         if 'index_right' in filtered_gdf.columns:
@@ -496,6 +500,30 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         if logger:
             logger.warn(f"Error processing file {file}: {e}")
         return None
+
+
+def element_is_near_border(polygon, bounding_box, eps):
+    """
+    Check if the polygon is near the border of the bounding box.
+
+    Args:
+        polygon: The polygon to check.
+        bounding_box: The bounding box.
+        eps: The epsilon value for the check.
+    """
+    pol_x = polygon[0]
+    pol_y = polygon[1]
+    pol_max_x = polygon[2]
+    pol_max_y = polygon[3]
+
+    minx = bounding_box.left + eps
+    miny = bounding_box.bottom + eps
+    maxx = bounding_box.right - eps
+    maxy = bounding_box.top - eps
+
+    if (pol_x < minx) or (pol_max_x > maxx) or (pol_y < miny) or (pol_max_y > maxy):
+        return True
+    return False
 
 
 def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
@@ -982,3 +1010,104 @@ def plot_ndvi_values(values_array: np.ndarray):
     plt.savefig("viridis_image_high_res.png", dpi=dpi, bbox_inches='tight', pad_inches=0)
     plt.show()
 
+
+def retrieve_neighboring_image_filenames(filename, other_filenames):
+    """
+    Retrieve the filenames of the neighboring images.
+
+    Args:
+        filename (str): Filename of the image.
+        other_filenames (list): List of other filenames.
+    """
+    transform, crs, width, height = tif_geoinfo(filename)
+    x = transform.c
+    y = transform.f
+
+    left = None
+    right = None
+    up = None
+    down = None
+
+    eps = 1e-3
+
+    for other in other_filenames:
+        if other == filename:
+            continue
+
+        other_transform, other_crs, other_width, other_height = tif_geoinfo(other)
+
+        if abs(other_transform.c - (x - (width*other_transform.a))) < eps and abs(other_transform.f - y) < eps:
+            left = other
+
+        if abs(other_transform.c - (x + (width*other_transform.a))) < eps and abs(other_transform.f - y) < eps:
+            right = other
+
+        if abs(other_transform.f - (y + (height*other_transform.a))) < eps and abs(other_transform.c - x) < eps:
+            up = other
+
+        if abs(other_transform.f - (y - (height*other_transform.a))) < eps and abs(other_transform.c - x) < eps:
+            down = other
+
+    return left, right, up, down
+
+
+def merge_images(src1, src2):
+    """
+    Merge two images with the same CRS.
+
+    Args:
+        src1 (rasterio.DatasetReader): First image.
+        src2 (rasterio.DatasetReader): Second image.
+    """
+    # Open the input images
+    if src1.crs != src2.crs:
+        raise ValueError("CRS of the two images do not match.")
+
+    # Merge the images
+    merged_data, merged_transform = merge([src1, src2])
+
+    # Update metadata for the merged image
+    merged_meta = src1.meta.copy()
+    merged_meta.update({
+        "driver": "GTiff",
+        "height": merged_data.shape[1],
+        "width": merged_data.shape[2],
+        "transform": merged_transform,
+    })
+    return merged_data, merged_meta
+
+
+def crop_image(src, width, height):
+    """
+    Crop an image to the specified dimensions.
+
+    Args:
+        src (rasterio.DatasetReader): Source image.
+        width (int): Width of the cropped image.
+        height (int): Height of the cropped image.
+    """
+    # Get the image dimensions
+    img_width, img_height = src.width, src.height
+
+    # Compute the center of the image
+    center_x, center_y = img_width // 2, img_height // 2
+
+    # Calculate the bounds of the cropping window
+    window_left = max(center_x - width // 2, 0)
+    window_top = max(center_y - height // 2, 0)
+    window = Window(window_left, window_top, width, height)
+
+    # Read the cropped window
+    cropped_data = src.read(window=window)
+
+    # Update metadata for the cropped image
+    cropped_transform = src.window_transform(window)
+    cropped_meta = src.meta.copy()
+    cropped_meta.update({
+        "width": width,
+        "height": height,
+        "transform": cropped_transform
+    })
+
+    # Save the cropped image
+    return cropped_data, cropped_meta

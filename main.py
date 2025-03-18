@@ -1,16 +1,21 @@
 import asyncio
-import time
-from pathlib import Path
-import sys
+import datetime
 import os
 import re
+import sys
+import time
 import warnings
+from pathlib import Path
+
+import rasterio
+
 from prediction import Predictor
 
 # Add the root project directory to the system path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import get_config, setup_model_cfg, Config
 from tiling import tile_data
+from helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
 from helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
 from post_performant import process_files_in_directory
 
@@ -40,13 +45,23 @@ def postprocess_files(config):
                                parallel=False,
                                filename_pattern=filename_pattern)
 
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
     # 4. Save the final predictions as gpkg in another folder
     for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
         if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
             continue
         crowns = gpd.read_file(os.path.join(config["output_directory"], 'geojson_predictions', file))
         logger.debug(f" File {file}, # crowns {len(crowns)} ")
-        crowns.to_file(os.path.join(config["output_directory"], file.replace('processed_', '')))
+        # If the option for timestamps is set in config.yml, we change the filename to include the timestamp
+        filename_without_processed = file.replace('processed_', '')
+        if config["timestamped_output_directory"]:
+            timestamp_directory = f"{config['output_directory']}/{timestamp}"
+            os.makedirs(timestamp_directory, exist_ok=True)
+            crowns.to_file(os.path.join(timestamp_directory, filename_without_processed))
+            crowns.to_file(os.path.join(config["output_directory"], filename_without_processed))
+        else:
+            crowns.to_file(os.path.join(config["output_directory"], filename_without_processed))
 
 
 # TODO make the batch size a good parameter
@@ -82,6 +97,10 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
     # Collect all TIF files
     images_directory = Path(config["image_directory"])
     images_paths = [str(f) for f in images_directory.glob("*.tif")]
+
+    merged_directory = Path(f"{images_directory}/{config['merged_path']}")
+    merged_images = [str(f) for f in merged_directory.glob("*.tif")]
+    images_paths.extend(merged_images)
 
     if not images_paths:
         logger.warning("No TIF files found for prediction.")
@@ -282,6 +301,97 @@ def preprocess_files(config):
             # Smash all groups together without any separator
             height_data_identifiers["".join(match.groups())] = f
 
+    if config["use_overlap"]:
+        # Filter out images that have already been processed (can be identified by the __ in the filename)
+        images_paths = [path for path in images_paths if "__" not in path]
+        height_paths = [path for path in height_paths if "__" not in path]
+
+        merged_directory = config["merged_path"]
+        def save_cropped_images(images_path, rgbi=True):
+            """
+            Save the cropped images based on the neighboring images.
+
+            Args:
+                images_path (list): List of image paths.
+            """
+            cropped_image_names = []
+            for f in images_path:
+                left, right, up, down = retrieve_neighboring_image_filenames(f, images_path)
+
+                directory = os.path.dirname(f)
+                result_directory = f"{directory}/{merged_directory}"
+                os.makedirs(result_directory, exist_ok=True)
+                f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
+                f_name_end = os.path.basename(f).replace(".tif", "").split("_")[-1]
+                # f_x_coord, f_y_coord = tif_geoinfo(f)
+                transform, crs, width, height = tif_geoinfo(f)
+                f_x_coord, f_y_coord = transform.c, transform.f
+
+                # We only look at the right and the bottom neighbors so that we don't process the same cropped image twice
+                if right is not None:
+                    transform, crs, width, height = tif_geoinfo(right)
+                    right_x_coord, right_y_coord = transform.c, transform.f
+
+                    with rasterio.open(f) as left_img, rasterio.open(f"{right}") as right_img:
+                        merged_img, merged_img_meta = merge_images(left_img, right_img)
+
+                        # Write the merged file only to memory for faster processing
+                        with rasterio.MemoryFile() as memfile:
+                            with memfile.open(**merged_img_meta) as merged_src:
+                                merged_src.write(merged_img)
+                                if rgbi:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(right_x_coord)}_{round(right_y_coord)}_{f_name_end}.tif"
+                                else:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(right_x_coord)}{round(right_y_coord)}_{f_name_end}.tif"
+                                # Perform cropping here
+                                cropped_data, cropped_meta = crop_image(merged_src,
+                                                                        (config["tile_width"] + 2 * config["buffer"]) *
+                                                                        config["overlapping_tiles_width"],
+                                                                        merged_src.height)
+                                # Save the cropped image
+                                with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
+                                    dest.write(cropped_data)
+
+                                cropped_image_names.append(f"{result_directory}/{output_filename}")
+
+                if down is not None:
+                    transform, crs, width, height = tif_geoinfo(down)
+                    down_x_coord, down_y_coord = transform.c, transform.f
+
+                    with rasterio.open(f) as top_img, rasterio.open(f"{down}") as bottom_img:
+                        merged_img, merged_img_meta = merge_images(top_img, bottom_img)
+
+                        # Write the merged file only to memory for faster processing
+                        with rasterio.MemoryFile() as memfile:
+                            with memfile.open(**merged_img_meta) as merged_src:
+                                merged_src.write(merged_img)
+                                if rgbi:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(down_x_coord)}_{round(down_y_coord)}_{f_name_end}.tif"
+                                else:
+                                    output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(down_x_coord)}{round(down_y_coord)}_{f_name_end}.tif"
+                                # Perform cropping here
+                                cropped_data, cropped_meta = crop_image(merged_src, merged_src.width,
+                                                                        (config["tile_height"] + 2 * config["buffer"]) *
+                                                                        config["overlapping_tiles_height"])
+                                # Save the cropped image
+                                with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
+                                    dest.write(cropped_data)
+
+                                cropped_image_names.append(f"{result_directory}/{output_filename}")
+
+            return cropped_image_names
+
+        # Here we merge and crop neighboring images
+        try:
+            cropped_image_filenames = save_cropped_images(images_paths, rgbi=True)
+            cropped_height_filenames = save_cropped_images(height_paths, rgbi=False)
+
+            # Include the image paths of the cropped images to the list of images to be processed
+            images_paths.extend(cropped_image_filenames)
+            height_paths.extend(cropped_height_filenames)
+        except Exception as e:
+            logger.error(f"Error merging and cropping images: {e}")
+
     # Validate height data availability
     missing_height_data = []
     for identifier, image_path in image_identifiers.items():
@@ -331,23 +441,38 @@ def process_files(config):
     end = time.time()
     postprocess_files_duration = end - start
 
-    if not config.get('keep_intermediate', False):
-        try:
-            shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
-        except FileNotFoundError:
-            pass
-    for folder in os.listdir(config["output_directory"]):
-        folder = os.path.join(config["output_directory"], folder)
-        keep_folders = ["logs"]
-        if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get(
-                'keep_intermediate', False):
-            shutil.rmtree(folder)
+    cleanup_files(config)
 
     # Print stats about the processing
     logger.debug(f"preprocess step took {preprocess_files_duration} seconds. ")
     logger.debug(f"predict step took {predict_tiles_duration} seconds. ")
     logger.debug(f"postprocess step took {postprocess_files_duration} seconds. ")
 
+def cleanup_files(config):
+    if not config.get('keep_intermediate', False):
+        try:
+            shutil.rmtree(config["tiles_path"])  # Remove the tiles directory
+            shutil.rmtree(config["image_directory"] + "/" + config["merged_path"])  # Remove the merged image directory
+            shutil.rmtree(config["height_data_path"] + "/" + config["merged_path"])  # Remove the merged tile directory
+        except FileNotFoundError:
+            pass
+
+        # Remove merged/cropped files in height / image directory
+        for file in os.listdir(config["image_directory"]):
+            if "__" in file:
+                os.remove(os.path.join(config["image_directory"], file))
+
+        for file in os.listdir(config["height_data_path"]):
+            if "__" in file:
+                os.remove(os.path.join(config["height_data_path"], file))
+
+
+    for folder in os.listdir(config["output_directory"]):
+        folder = os.path.join(config["output_directory"], folder)
+        keep_folders = ["logs"]
+        if os.path.isdir(folder) and os.path.basename(folder) not in keep_folders and not config.get(
+                'keep_intermediate', False):
+            shutil.rmtree(folder)
 
 def profile_code(config, threshold=0.05):
     """
