@@ -1071,8 +1071,8 @@ def process_files_in_directory(directory, height_directory, image_directory, par
     if image_pattern is None:
         image_pattern = "(\\d+)\\.tif"
 
-    image_merged_pattern = Config().image_merged_regex
-    height_merged_pattern = Config().height_data_merged_regex
+    image_merged_pattern = "FDOP20_(\\d+)_(\\d+)_(\\d+)_(\\d+)_rgbi\\.tif"
+    height_merged_pattern = "nDSM_(\\d+)(\\d+)_1km\\.tif"
     image_merged_pattern = re.compile(image_merged_pattern)
     height_merged_pattern = re.compile(height_merged_pattern)
 
