@@ -4,9 +4,6 @@ height_data_path: "data/nDSM"     # Corresponding nDSM data to the TIF files
 image_regex: "FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"       # Image Regex to extract a identifier from the file name, examples: "FDOP20_(\d+)_rgbi\.tif","FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"
 height_data_regex: "nDSM_(\\d+)_1km\\.tif" # Corresponding height regex to associate the nDSM data
 
-image_merged_regex: "FDOP20_(\\d+)_(\\d+)_(\\d+)_(\\d+)_rgbi\\.tif"
-height_data_merged_regex: "nDSM_(\\d+)(\\d+)_1km\\.tif"
-
 #combined_model: "data/model_combined.pth"              # I) make combined prediction or specify the urban_model and forrest_model separately
 urban_model: "data/model_combined.pth"                  # II) specify the urban model
 forrest_model: "data/model_forrest.pth"                 # II) specify the forrest model
@@ -14,12 +11,16 @@ forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # II) specify the forr
 
 output_directory: "output"        # Output folder, default: ./output
 tiles_path: "tiles"               # Intermediate folder for tiling, default: ./tiles
-merged_path: "merged"             # default: ./merged
-#continue_path: "continue.yml"      # default: ./output/continue.yml
+
+#continue_path: "continue.yml"    # default: ./output/continue.yml
 
 # Overlap
-overlapping_tiles_width: 3
-overlapping_tiles_height: 3
+use_overlap: True                 # default: true
+merged_path: "merged"             # default: ./merged
+overlapping_tiles_width: 3        # default: 3
+overlapping_tiles_height: 3       # default: 3
+image_merged_regex: "FDOP20_(\\d+)_(\\d+)_(\\d+)_(\\d+)_rgbi\\.tif" # Image regex to identify the merged images, currently hardcoded to 4 digits, corresponding to both origin images
+height_data_merged_regex: "nDSM_(\\d+)(\\d+)_1km\\.tif"             # Corresponding height regex to associate the nDSM data of the merged images, again using hardcoded digits from the origin images
 
 # Tile parameters
 tile_width: 50    # default: 50
@@ -55,4 +56,4 @@ num_workers: 5  # default: 10
 verbose: False            # default: false
 debug: False              # default: false
 keep_intermediate: False  # default: false
-timestamped_output_directory: True
+timestamped_output_directory: False # default: false
