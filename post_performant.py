@@ -1,4 +1,3 @@
-import re
 import json
 import os
 import re
@@ -143,7 +142,7 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
     min_col, max_col = sorted([min(min_col, width - 1), max(max_col, 0)])
 
     # Extract height data subset based on bounding box
-    subset = height_data[min_row:max_row + 1, min_col:max_col + 1]
+    subset = height_data[min_col:max_col + 1, min_row:max_row + 1]
     if subset.size == 0:
         print("Error: The subset of height data is empty.")
         return -1, None    
@@ -237,12 +236,12 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
     min_col, max_col = sorted([min(min_col, width - 1), max(max_col, 0)])
 
     # Extract height data subset based on bounding box
-    subset = ndvi_data[min_row:max_row + 1, min_col:max_col + 1]
+    subset = ndvi_data[min_col:max_col + 1, min_row:max_row + 1]
     if subset.size == 0:
         print("Error: The subset of height data is empty.")
         return -1, None
 
-        # Prepare points (x, y) for batch processing
+    # Prepare points (x, y) for batch processing
     rows, cols = np.meshgrid(np.arange(subset.shape[0]), np.arange(subset.shape[1]), indexing='ij')
     rows, cols = rows.flatten(), cols.flatten()
 
@@ -288,10 +287,6 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
         # Extract heights and coordinates where points are inside the polygon
         inside_ndvi = subset.flatten()[inside_mask]
 
-        # Increase the radius until we have at least 50 points (or the radius is too large)
-        #radius = ((max_x - min_x) + (max_y - min_y) / 4) * scaling_factor
-        #inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
-        #inside_ndvi = subset.flatten()[inside_mask]
         
         if inside_ndvi.shape[0] == 0:
             print(f"TODO No NDVI points found within polygon {i}. Implementing fallback to centroid.")
