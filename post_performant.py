@@ -728,31 +728,32 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
     # Preselect features based on the heights and NDVI values to speed up containment processing
     preselected_features = []
     for i, feature in enumerate(features):
-        polygon = shape(feature['geometry'])
-        polygon_is_at_border = exclude_elements_near_border(polygon.bounds, ndvi_bounds, eps=1.5)
-        if polygon_is_at_border:
-            continue
-
-        image_width = ndvi_data.shape[1]
-        image_height = ndvi_data.shape[0]
-
-        vertical_merged_image_height = ((config.tile_height + 2 * config.buffer) * config.overlapping_tiles_height) * ndvi_scaling_y
-        horizontal_merged_image_width = ((config.tile_width + 2 * config.buffer) * config.overlapping_tiles_width) * ndvi_scaling_x
-
-        if not (image_height == vertical_merged_image_height or image_width == horizontal_merged_image_width):
-            # Here we want to remove everything that is inside the borders, where the trees are covered by the overlap entirely (! entirely is important here)
-            right_border = ndvi_bounds.right - (horizontal_merged_image_width / 2.0)
-            left_border = ndvi_bounds.left + (horizontal_merged_image_width / 2.0)
-            top_border = ndvi_bounds.top - (vertical_merged_image_height / 2.0)
-            bottom_border = ndvi_bounds.bottom + (vertical_merged_image_height / 2.0)
-
-            polyon_is_entirely_inside_top_overlap = top_border < polygon.bounds[1]
-            polyon_is_entirely_inside_bottom_overlap = bottom_border > polygon.bounds[3]
-            polyon_is_entirely_inside_left_overlap = left_border > polygon.bounds[2]
-            polyon_is_entirely_inside_right_overlap = right_border < polygon.bounds[0]
-
-            if polyon_is_entirely_inside_top_overlap or polyon_is_entirely_inside_bottom_overlap or polyon_is_entirely_inside_left_overlap or polyon_is_entirely_inside_right_overlap:
+        if Config().use_overlap:
+            polygon = shape(feature['geometry'])
+            polygon_is_at_border = exclude_elements_near_border(polygon.bounds, ndvi_bounds, eps=1.5)
+            if polygon_is_at_border:
                 continue
+
+            image_width = ndvi_data.shape[1]
+            image_height = ndvi_data.shape[0]
+
+            vertical_merged_image_height = ((config.tile_height + 2 * config.buffer) * config.overlapping_tiles_height) * ndvi_scaling_y
+            horizontal_merged_image_width = ((config.tile_width + 2 * config.buffer) * config.overlapping_tiles_width) * ndvi_scaling_x
+
+            if not (image_height == vertical_merged_image_height or image_width == horizontal_merged_image_width):
+                # Here we want to remove everything that is inside the borders, where the trees are covered by the overlap entirely (! entirely is important here)
+                right_border = ndvi_bounds.right - (horizontal_merged_image_width / 2.0)
+                left_border = ndvi_bounds.left + (horizontal_merged_image_width / 2.0)
+                top_border = ndvi_bounds.top - (vertical_merged_image_height / 2.0)
+                bottom_border = ndvi_bounds.bottom + (vertical_merged_image_height / 2.0)
+
+                polyon_is_entirely_inside_top_overlap = top_border < polygon.bounds[1]
+                polyon_is_entirely_inside_bottom_overlap = bottom_border > polygon.bounds[3]
+                polyon_is_entirely_inside_left_overlap = left_border > polygon.bounds[2]
+                polyon_is_entirely_inside_right_overlap = right_border < polygon.bounds[0]
+
+                if polyon_is_entirely_inside_top_overlap or polyon_is_entirely_inside_bottom_overlap or polyon_is_entirely_inside_left_overlap or polyon_is_entirely_inside_right_overlap:
+                    continue
 
         if heights[i] < config.height_threshold and heights[i] > -1.0:
             # Height is too small, discard it
@@ -1050,6 +1051,7 @@ def process_files_in_directory(directory, height_directory, image_directory, par
         parallel (bool): Whether to process files in parallel (default is True).
     """
     geojson_files = [f for f in os.listdir(directory) if f.endswith('.gpkg')]
+    geojson_files = [file for file in geojson_files if not file.startswith("processed_")]
 
     if filename_pattern is None:
         height_data_pattern = "(\\d+)\\.tif"
@@ -1101,7 +1103,6 @@ def process_files_in_directory(directory, height_directory, image_directory, par
                 image_file_path = find_matching_file(base_name, image_merged_pattern, image_merged_pattern,
                                                      image_directory)
 
-
             if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
                 process_single_file(file_path, processed_file_path, height_file_path, image_file_path)
@@ -1115,12 +1116,16 @@ def process_files_in_directory(directory, height_directory, image_directory, par
 
             futures = []
             for filename in geojson_files:
-                if filename.startswith("processed_"):
-                    continue
                 file_path = os.path.join(directory, filename)
                 base_name = os.path.splitext(os.path.basename(filename))[0]
                 height_file_path = find_matching_file(base_name, image_pattern, height_data_pattern, height_directory)
                 image_file_path = find_matching_file(base_name, image_pattern, image_pattern, image_directory)
+
+                if height_file_path is None or image_file_path is None:
+                    height_file_path = find_matching_file(base_name, image_merged_pattern, height_merged_pattern,
+                                                          height_directory)
+                    image_file_path = find_matching_file(base_name, image_merged_pattern, image_merged_pattern,
+                                                         image_directory)
 
                 if height_file_path and image_file_path:
                     processed_file_path = os.path.join(directory, f"processed_{filename}")
