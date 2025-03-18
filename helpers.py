@@ -464,8 +464,6 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         with open(file, "r") as pred_file:
             data = json.load(pred_file)
 
-        bounding_box = box_filter(tifpath, shift)
-
         # Process each prediction
         features = []
         for crown_data in data:
@@ -491,6 +489,8 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         
         if simplify_tolerance > 0:
             gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
+
+        bounding_box = box_filter(tifpath, shift)
         filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
         if 'index_right' in filtered_gdf.columns:
             filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
@@ -502,7 +502,15 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
         return None
 
 
-def exclude_elements_near_border(polygon, bounding_box, eps):
+def element_is_near_border(polygon, bounding_box, eps):
+    """
+    Check if the polygon is near the border of the bounding box.
+
+    Args:
+        polygon: The polygon to check.
+        bounding_box: The bounding box.
+        eps: The epsilon value for the check.
+    """
     pol_x = polygon[0]
     pol_y = polygon[1]
     pol_max_x = polygon[2]
