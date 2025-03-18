@@ -852,13 +852,14 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
             'Area': area,
             'TreeHeight': height,
             'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])},  # Ensure JSON compatibility
-            'is_contained': containment_data['is_contained'],
-            'num_contained': containment_data['num_contained'],
-            'containment_ratio': containment_data['containment_ratio'],
-            'MeanNDVI': mean_ndvi[i],
-            'VarNDVI': var_ndvi[i],
-            'MaxNDVI': max_ndvi[i],
-            'MinNDVI': min_ndvi[i],
+            'Diameter': 2 * (area / np.pi) ** 0.5,
+            #'is_contained': containment_data['is_contained'],
+            #'num_contained': containment_data['num_contained'],
+            #'containment_ratio': containment_data['containment_ratio'],
+            #'MeanNDVI': mean_ndvi[i],
+            #'VarNDVI': var_ndvi[i],
+            #'MaxNDVI': max_ndvi[i],
+            #'MinNDVI': min_ndvi[i],
         })
 
         new_feature = {

@@ -13,7 +13,7 @@ from prediction import Predictor
 
 # Add the root project directory to the system path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import get_config, setup_model_cfg
+from config import get_config, setup_model_cfg, Config
 from tiling import tile_data
 from helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
 from helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
@@ -29,6 +29,8 @@ def postprocess_files(config):
     """
     postprocess the files according to the configuration.
     """
+    config_obj = Config()
+    config_obj._load_into_config(config)
     logger = config["logger"]
     logger.info("Postprocessing the predictions.")
     filename_pattern = (config.get('image_regex', "(\\d+)\\.tif"), config.get('height_data_regex', "(\\d+)\\.tif"))
@@ -125,6 +127,8 @@ def predict_tiles(config):
     """
     Predict the tiles according to the configuration.
     """
+    config_obj = Config()
+    config_obj._load_into_config(config)
     logger = config["logger"]
 
     # 1. If urban model is available, predict the tiles using the urban model
@@ -243,6 +247,8 @@ def preprocess_files(config):
     """
     Preprocess the files according to the configuration.
     """
+    config_obj = Config()
+    config_obj._load_into_config(config)
     logger = config["logger"]
 
     # 1. Read from the dictionary
@@ -415,6 +421,8 @@ def process_files(config):
     Process the files according to the configuration.
     """
     logger = config["logger"]
+    config_obj = Config()
+    config_obj._load_into_config(config)
 
     start = time.time()
     # Read the files and tile them
@@ -496,7 +504,6 @@ def profile_code(config, threshold=0.05):
 
 
 if __name__ == "__main__":
-    # multiprocessing.set_start_method('spawn', force=True)
     config, _ = get_config("config.yml")
 
     # Print Information about the configuration
