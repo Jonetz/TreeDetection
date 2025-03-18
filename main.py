@@ -384,9 +384,7 @@ def preprocess_files(config):
         # Here we merge and crop neighboring images
         try:
             cropped_image_filenames = save_cropped_images(images_paths, rgbi=True)
-            print("Cropped images: ", cropped_image_filenames)
             cropped_height_filenames = save_cropped_images(height_paths, rgbi=False)
-            print("Cropped height data: ", cropped_height_filenames)
 
             # Include the image paths of the cropped images to the list of images to be processed
             images_paths.extend(cropped_image_filenames)
@@ -427,13 +425,13 @@ def process_files(config):
 
     start = time.time()
     # Read the files and tile them
-    # preprocess_files(config)
+    preprocess_files(config)
     end = time.time()
     preprocess_files_duration = end - start
 
     start = time.time()
     # Predict the tiles
-    # predict_tiles(config)
+    predict_tiles(config)
     end = time.time()
     predict_tiles_duration = end - start
 
