@@ -52,9 +52,13 @@ We provide supplementary data for training the models, segmentation of the box a
 
 ### Visual Samples
 
-Sample in Baden-Württemberg, Southern Germany             |  Sample of the University of Stuttgart | Sample of Stuttgart downtown             |  Sample of a forest near the University
-:-------------------------:|:-------------------------:|:-------------------------:|:-------------------------:
-![Sample in Baden-Württemberg, Southern Germany](supplementary/imgs/sample1.jpg)  |  ![Sample of the University of Stuttgart](supplementary/imgs/sample2.jpg)  |  ![Sample of Stuttgart downtown](supplementary/imgs/sample3.jpg)  |  ![Sample of a forest near the University](supplementary/imgs/sample4.jpg)
+Sample in Baden-Württemberg, Southern Germany             |  Sample of the University of Stuttgart
+:-------------------------:|:-------------------------:
+![Sample in Baden-Württemberg, Southern Germany](supplementary/imgs/sample1.jpg)  |  ![Sample of the University of Stuttgart](supplementary/imgs/sample2.jpg)
+
+Sample of Stuttgart downtown             |  Sample of a forest near the University
+:-------------------------:|:-------------------------:
+![Sample of Stuttgart downtown](supplementary/imgs/sample3.jpg)  |  ![Sample of a forest near the University](supplementary/imgs/sample4.jpg)
 
 
 Illustration of our autolabel generation using height maps, as given in the supplementary material 
