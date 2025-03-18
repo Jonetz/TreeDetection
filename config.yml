@@ -1,8 +1,8 @@
 # File handling
 image_directory: "data/rgb"       # Location of all GeoTIFs-Files that we want to infer
 height_data_path: "data/nDSM"     # Corresponding nDSM data to the TIF files
-image_regex: "(\\d+)\\.tif"       # Image Regex to extract a identifier from the file name, examples: "FDOP20_(\d+)_rgbi\.tif","FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"
-height_data_regex: "(\\d+)\\.tif" # Corresponding height regex to associate the nDSM data
+image_regex: "FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"       # Image Regex to extract a identifier from the file name, examples: "FDOP20_(\d+)_rgbi\.tif","FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"
+height_data_regex: "nDSM_(\\d+)_1km\\.tif" # Corresponding height regex to associate the nDSM data
 
 image_merged_regex: "FDOP20_(\\d+)_(\\d+)_(\\d+)_(\\d+)_rgbi\\.tif"
 height_data_merged_regex: "nDSM_(\\d+)(\\d+)_1km\\.tif"
