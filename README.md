@@ -1,5 +1,5 @@
 # TreeDetection
-Python Software for countrywide detection and delienation of tree crowns based on a trained ResNet Model. Developed by [Luca Reichmann](https://github.com/reichmla), [Jonas Nasimzada](https://github.com/JonasNasimzada), [Alina Roitberg](https://aroitberg.github.io/), and [Jonas Geiselhart](https://github.com/Jonetz) at the University of Stuttgart in Corporation with the [Office of Geoinformation and Land-development Baden-Württemberg](https://www.lgl-bw.de/).
+Python Software for countrywide detection and delineation of tree crowns based on a trained ResNet Model. Developed by [Luca Reichmann](https://github.com/reichmla), [Jonas Nasimzada](https://github.com/JonasNasimzada), [Alina Roitberg](https://aroitberg.github.io/), and [Jonas Geiselhart](https://github.com/Jonetz) at the University of Stuttgart in Corporation with the [Office of Geoinformation and Land-development Baden-Württemberg](https://www.lgl-bw.de/).
 
 ## Usage
 In order to infer custom images, a config with all parameters must be constructed and a function can be called to execute inference based on all parameters in the config. 
@@ -13,7 +13,7 @@ The program can be executed with either one or two models based on whats given i
 ## Additional Data 
 Additional data such as models, example images and height maps, training datasets can be found [here](https://placeholder.com/).
 
-## Requirementes
+## Requirements
 The program requires a gpu with an adequate installed cuda version for training and inference.
 Further the following libaries are used:
 
@@ -44,24 +44,23 @@ Additionally detectree in version 1.0.8 is needed for training. This can be down
 ## Training and Inference 
 
 Illustration of the different steps during training and inference, that can be applied through the framework.
-![Training description](supplementary/imgs/illustration1.jpg)
-
+<!-- ![Training description](supplementary/imgs/illustration1.jpg) -->
+<img src="supplementary/imgs/illustration1.jpg" width="50%" />
 
 ## Supplementary Data 
 We provide supplementary data for training the models, segmentation of the box annotations to more fine grained annotations, generation of autolabels, and model evaluation.
 
 ### Visual Samples
-Sample in Baden-Württemberg, Southern Germany
-![Sample in Baden-Württemberg, Southern Germany](supplementary/imgs/sample1.jpg)
 
-Sample of the University of Stuttgart
-![Sample of the University of Stuttgart](supplementary/imgs/sample2.jpg)
+Sample in Baden-Württemberg, Southern Germany             |  Sample of the University of Stuttgart
+:-------------------------:|:-------------------------:
+![Sample in Baden-Württemberg, Southern Germany](supplementary/imgs/sample1.jpg)  |  ![Sample of the University of Stuttgart](supplementary/imgs/sample2.jpg)
 
-Sample of Stuttgart downtown
-![Sample of Stuttgart downtown](supplementary/imgs/sample3.jpg)
+Sample of Stuttgart downtown             |  Sample of a forest near the University
+:-------------------------:|:-------------------------:
+![Sample of Stuttgart downtown](supplementary/imgs/sample3.jpg)  |  ![Sample of a forest near the University](supplementary/imgs/sample4.jpg)
 
-Sample of a forest near the University
-![Sample of a forest near the University](supplementary/imgs/sample4.jpg)
 
 Illustration of our autolabel generation using height maps, as given in the supplementary material 
-![Autolabel Generation](supplementary/imgs/illustration2.jpg)
+<!-- ![Autolabel Generation](supplementary/imgs/illustration2.jpg) -->
+<img src="supplementary/imgs/illustration2.jpg" width="50%" />
