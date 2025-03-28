@@ -7,4 +7,5 @@ from TreeDetection.postprocessing import *
 from TreeDetection.preprocessing import *
 from TreeDetection.prediction import *
 from TreeDetection.utilities import *
-__version__ = 'dev'
+
+__version__ = "0.1.0"

@@ -1,8 +1,9 @@
 from setuptools import setup, find_packages
-from TreeDetection import __version__, __init__
+from TreeDetection import __version__
+
 setup(
     name="TreeDetection",
-    version="0.1.0",
+    version=__version__,
     packages=find_packages(),
     install_requires=[
         'affine',
@@ -13,7 +14,6 @@ setup(
         'matplotlib',
         'numpy==1.23.0',
         'numba>=0.60.0',
-        'numpy',
         'opencv_python',
         'pandas',
         'pycocotools',
@@ -24,7 +24,6 @@ setup(
         'scipy',
         'Shapely==2.0.6',
         'tqdm',
-        #'detectron2 @ git+https://dl.fbaipublicfiles.com/detectron2/wheels/cu113/torch1.10/index.html'
     ],
     url='https://github.com/Jonetz/TreeDetection',
     extras_require={
