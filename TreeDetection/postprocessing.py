@@ -15,102 +15,9 @@ from rasterio.enums import Resampling
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
 
-from config import Config
-from helpers import ndvi_array_from_rgbi, check_similarity_bounds, element_is_near_border
-
-
-def convert_to_python_types(data):
-    """
-    Recursively convert NumPy data types to native Python types.
-    """
-    if isinstance(data, dict):
-        return {key: convert_to_python_types(value) for key, value in data.items()}
-    elif isinstance(data, list):
-        return [convert_to_python_types(item) for item in data]
-    elif isinstance(data, np.ndarray):
-        return data.tolist()  # Convert NumPy arrays to Python lists
-    elif isinstance(data, (np.float32, np.float64)):
-        return float(data)  # Convert NumPy floats to Python floats
-    elif isinstance(data, (np.int32, np.int64)):
-        return int(data)  # Convert NumPy ints to Python ints
-    else:
-        return data
-
-
-# Assuming a function to check if GPU is available, this can be adjusted depending on your setup
-def is_gpu_available():
-    try:
-        cp.cuda.Device(0).use()  # Check if the GPU is available and accessible
-        return True
-    except cp.cuda.runtime.CUDARuntimeError:
-        return False
-
-def raster_to_geo(transform, row, col):
-    """Convert raster indices to geographical coordinates."""
-    # Extract elements from the 3x3 affine matrix
-    a, b, c, d, e, f, g, h, i = transform
-    # Apply the affine transformation to convert row, col to x, y
-    x = a * col + b * row + c
-    y = d * col + e * row + f
-    return x, y
-
-
-def geo_to_raster(transform, x, y):
-    """Convert geographical coordinates to raster indices."""
-    # Extract elements from the 3x3 affine matrix
-    a, b, c, d, e, f, g, h, i = transform
-    # Check for potential projective transformation and avoid division by zero
-    if a == 0 or e == 0:
-        raise ValueError(f"Affine transform scaling factors are zero: {a}, {e}, for Affine: {transform}")
-        # Apply the inverse affine transformation (inverse of a 3x3 matrix)
-    col = (x - c) / a
-    row = (y - f) / e
-    return int(row), int(col)
-
-def euclidean_distance(x1, y1, x2, y2):
-    return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
-
-
-def raster_to_geo_batch(transform, rows, cols):
-    """Convert raster indices to geographical coordinates (batch version)."""
-    a, b, c, d, e, f, g, h, i = transform
-    x = a * cols + b * rows + c
-    y = d * cols + e * rows + f
-    return x, y
-
-
-def geo_to_raster_batch(transform, x, y):
-    """Convert geographical coordinates to raster indices (batch version)."""
-    a, b, c, d, e, f, g, h, i = transform
-    if a == 0 or e == 0:
-        raise ValueError(f"Affine transform scaling factors are zero: {a}, {e}, for Affine: {transform}")
-    col = (x - c) / a
-    row = (y - f) / e
-    return cp.floor(row).astype(cp.int32), cp.floor(col).astype(cp.int32)
-
-
-def is_point_in_polygon_batch(center_x, center_y, radius, px, py):
-    """
-    Vectorized check if points are inside a circle approximated by the bounding box of the polygon.
-    The center of the circle is the centroid of the bounding box, and the radius is the maximum distance
-    from the center to any point in the bounding box.
-
-    Arguments:
-    - polygon_x: (num_vertices, ) x-coordinates of the polygon's vertices
-    - polygon_y: (num_vertices, ) y-coordinates of the polygon's vertices
-    - px, py: (batch_size, ) x and y coordinates of the points to check
-
-    Returns:
-    - inside_mask: (batch_size, ) Boolean array where True indicates the point is inside the circle
-    """
-
-    # Calculate the squared distance from each point to the circle center
-    dist_squared = (px - center_x) ** 2 + (py - center_y) ** 2
-    # Return True if the distance is less than or equal to the radius squared
-    inside_mask = dist_squared <= radius ** 2
-
-    return inside_mask
-
+from TreeDetection.config import Config
+from TreeDetection.helpers import ndvi_array_from_rgbi, check_similarity_bounds, element_is_near_border
+from TreeDetection.utilities import geo_to_raster, raster_to_geo, is_point_in_polygon_batch, calculate_area, calculate_iou, round_coordinates, convert_to_python_types, get_centroids
 
 def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, height_data: np.ndarray,
                               transform: np.ndarray, width, height, bounds):
@@ -201,7 +108,6 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
             max_coordinates[i] = inside_coords[max_index]
     
     return max_heights, max_coordinates
-
 
 def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_data: np.ndarray,
                             transform: np.ndarray, width: int, height: int, bounds: BoundingBox):
@@ -431,32 +337,6 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
     ndvi_values = [min_ndvi_values, max_ndvi_values, mean_ndvi_values, var_ndvi_values]
     return height_values, ndvi_values
 
-
-def calculate_iou(batch_boxes1, batch_boxes2):
-    # Ensure batch_boxes1 and batch_boxes2 are 2D arrays with shape [N, 4]
-    batch_boxes1 = cp.array(batch_boxes1).reshape(-1, 4)
-    batch_boxes2 = cp.array(batch_boxes2).reshape(-1, 4)
-    
-    # Calculate the intersection of boxes using broadcasting
-    xA = cp.maximum(batch_boxes1[:, 0][:, None], batch_boxes2[:, 0])  # Broadcast to compare all pairs
-    yA = cp.maximum(batch_boxes1[:, 1][:, None], batch_boxes2[:, 1])  # Broadcast to compare all pairs
-    xB = cp.minimum(batch_boxes1[:, 2][:, None], batch_boxes2[:, 2])  # Broadcast to compare all pairs
-    yB = cp.minimum(batch_boxes1[:, 3][:, None], batch_boxes2[:, 3])  # Broadcast to compare all pairs
-
-    # Calculate the area of intersection
-    interArea = cp.maximum(0, xB - xA) * cp.maximum(0, yB - yA)
-    
-    # Calculate the area of each box
-    box1Area = (batch_boxes1[:, 2] - batch_boxes1[:, 0]) * (batch_boxes1[:, 3] - batch_boxes1[:, 1])
-    box2Area = (batch_boxes2[:, 2] - batch_boxes2[:, 0]) * (batch_boxes2[:, 3] - batch_boxes2[:, 1])
-    
-    # Calculate the area of union
-    unionArea = box1Area[:, None] + box2Area - interArea  # Broadcast union area computation
-    
-    # Return IoU for all pairs
-    return interArea / unionArea
-
-
 def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores, iou_threshold, area_threshold):
     """
     Filter polygons by IOU and area thresholds on the GPU, keeping the polygon with the highest confidence score.
@@ -515,54 +395,6 @@ def filter_polygons_by_iou_and_area(polygon_dict, id_to_area, confidence_scores,
     retained_ids -= remove_ids
 
     return retained_ids
-
-def calculate_area(polygon):
-    """
-    Calculate the area of a polygon.
-
-    Args:
-        polygon (shapely.geometry.Polygon): Polygon object.
-
-    Returns:
-        float: Area of the polygon.
-    """
-    return polygon.area
-
-def get_centroids(polygon_x_gpu, polygon_y_gpu):
-    """
-    Compute the centroids for all polygons in the batch, ignoring NaN values within polygons.
-    
-    Args:
-        polygon_x_gpu (ndarray): x-coordinates of all polygons (padded with NaNs).
-        polygon_y_gpu (ndarray): y-coordinates of all polygons (padded with NaNs).
-    
-    Returns:
-        centroids (ndarray): The centroids of all polygons.
-    """
-    # Compute centroids, ignoring NaNs within each polygon
-    centroid_x = cp.nanmean(polygon_x_gpu, axis=1)
-    centroid_y = cp.nanmean(polygon_y_gpu, axis=1)
-
-    # Combine centroids into a single array
-    centroids = cp.stack((centroid_x, centroid_y), axis=1)
-    return centroids
-
-def round_coordinates(polygon, decimals=3):
-    """
-    Round the coordinates of a polygon to a specified number of decimal places.
-
-    Args:
-        polygon (list): Polygon coordinates.
-        decimals (int): Number of decimal places to round to (default is 3).
-
-    Returns:
-        list: Rounded polygon coordinates.
-    """
-    factor = 10 ** decimals
-    try:
-        return [[[round(coord * factor) / factor for coord in point] for point in ring] for ring in polygon]
-    except:
-        return [[[coord for coord in point] for point in ring] for ring in polygon]
 
 def process_containment_features(features, polygon_ids, polygon_bounds, containment_threshold):
     """
@@ -634,8 +466,7 @@ def process_containment_features(features, polygon_ids, polygon_bounds, containm
         })
     return updated_features
 
-
-def process_features(features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds, ndvi_scaling_x, ndvi_scaling_y):
+def process_features(features, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds, ndvi_scaling_x, ndvi_scaling_y):
     config = Config()
 
     def preprocess_features(features):
@@ -771,8 +602,6 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
             continue
         preselected_features.append(feature)
 
-    #polygon_x_all, polygon_y_all, ids_all, max_points, polygon_bounds = preprocess_features(preselected_features)
-
     # Call process_containment_features and retrieve attributes
     polygon_bounds = cp.array(polygon_bounds, dtype=cp.float32)
     containment_results = process_containment_features(features, ids_all, polygon_bounds, config.containment_threshold)
@@ -875,13 +704,7 @@ def process_features(features, polygon_dict, id_to_area, height_data, height_tra
         updated_features.append(new_feature)
     return updated_features
 
-def get_centroid_gpu(polygon_x_gpu, polygon_y_gpu):
-    # Example: Calculate the centroid using CuPy (replace with your actual method)
-    x_mean = cp.mean(polygon_x_gpu)
-    y_mean = cp.mean(polygon_y_gpu)
-    return cp.array([x_mean, y_mean])
-
-def process_geojson(data, confidence_threshold, containment_threshold, iou_threshold, area_threshold, height_data_path, rgbi_data_path):
+def process_geojson(data, confidence_threshold, iou_threshold, area_threshold, height_data_path, rgbi_data_path):
     """
     Process a GeoJSON object to update features with additional properties based on containment and height data.
 
@@ -911,7 +734,7 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
         polygon = shape(feature['geometry']).simplify(0.5)
         area = calculate_area(polygon)
         polygon_id = str(i)
-        feature['properties']['poly_id'] = polygon_id  # TODO modify this to use a deepcopy
+        feature['properties']['poly_id'] = polygon_id
         id_to_area[polygon_id] = area
         i += 1
     polygon_dict = {
@@ -946,7 +769,6 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
         )
         height_transform = src.transform * src.transform.scale((src.width / height_data.shape[-1]),
                                                              (src.height / height_data.shape[-2]))
-        height_width_tif, height_height_tif = src.width, src.height
         height_bounds = src.bounds
 
     ndvi_scaling_factor = config.ndvi_scaling_factor
@@ -965,10 +787,9 @@ def process_geojson(data, confidence_threshold, containment_threshold, iou_thres
     filtered_features = [feature for feature in filtered_features if feature['properties']['poly_id'] in retained_ids]
 
     # 4. Filter polygons more complex based on containment and calculate height data for each polygon
-    new_features = process_features(filtered_features, polygon_dict, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds, abs(orig_transform.a), abs(orig_transform.e))
+    new_features = process_features(filtered_features, id_to_area, height_data, height_transform, height_bounds, ndvi_data, ndvi_transform, ndvi_bounds, abs(orig_transform.a), abs(orig_transform.e))
     data['features'] = new_features
     return data
-
 
 def order_properties(feature, schema_properties):
     """
@@ -984,7 +805,6 @@ def order_properties(feature, schema_properties):
     ordered_properties = {key: feature['properties'].get(key, None) for key in schema_properties.keys()}
     feature['properties'] = ordered_properties
     return feature
-
 
 def process_single_file(file_path, processed_file_path, height_data_path, rgbi_data_path):
     """
@@ -1008,7 +828,7 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         "type": "FeatureCollection",
         "features": features
     }
-    processed_data = process_geojson(data, config.confidence_threshold, config.containment_threshold, config.iou_threshold, config.area_threshold, height_data_path, rgbi_data_path)
+    processed_data = process_geojson(data, config.confidence_threshold, config.iou_threshold, config.area_threshold, height_data_path, rgbi_data_path)
 
     new_schema = schema.copy()
     new_properties_schema = {
@@ -1046,7 +866,6 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
     with fiona.open(processed_file_path, 'w', driver='GPKG', schema=new_schema, crs=crs) as dest:
         for feature in filtered_features:
             dest.write(feature)
-
 
 def process_files_in_directory(directory, height_directory, image_directory, parallel=True, filename_pattern=None):
     """

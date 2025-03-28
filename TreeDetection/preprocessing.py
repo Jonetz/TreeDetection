@@ -21,7 +21,6 @@ def get_features(gdf: gpd.GeoDataFrame):
     """Function to parse features from GeoDataFrame in such a manner that rasterio wants them."""
     return [json.loads(gdf.to_json())["features"][0]["geometry"]]
 
-
 async def write_metadata_async(meta_name, metadata):
     """Asynchronously write metadata to a JSON file."""
     async with aiofiles.open(meta_name, "w") as meta_file:

@@ -9,20 +9,21 @@ from pathlib import Path
 
 import rasterio
 
-from prediction import Predictor
+from TreeDetection.prediction import Predictor
 
-# Add the root project directory to the system path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import get_config, setup_model_cfg, Config
-from tiling import tile_data
-from helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
-from helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
-from post_performant import process_files_in_directory
+from TreeDetection.config import get_config, setup_model_cfg, Config
+from TreeDetection.preprocessing import tile_data
+from TreeDetection.helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
+from TreeDetection.helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
+from TreeDetection.postprocessing import process_files_in_directory
 
 import geopandas as gpd
 import shutil
-from torch.amp import autocast
-
+try:
+    from torch.cuda.amp import autocast
+except ModuleNotFoundError:
+    from torch.amp import autocast
+    
 gpd.options.display_precision = 2
 
 def postprocess_files(config):
@@ -64,7 +65,6 @@ def postprocess_files(config):
             crowns.to_file(os.path.join(config["output_directory"], filename_without_processed))
 
 
-# TODO make the batch size a good parameter
 def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10, exclude_vars=None):
     """
     Predict the tiles according to the configuration using mixed precision and parallel inference.
@@ -474,34 +474,6 @@ def cleanup_files(config):
                 'keep_intermediate', False):
             shutil.rmtree(folder)
 
-def profile_code(config, threshold=0.05):
-    """
-    Profile the code to analyze performance using cProfile.
-    """
-    import cProfile
-    import pstats
-    import io
-
-    pr = cProfile.Profile()
-    pr.enable()
-
-    # Start the processing
-    process_files(config)
-
-    pr.disable()
-
-    s = io.StringIO()
-    # Sort by cumulative time and apply the threshold
-    ps = pstats.Stats(pr, stream=s).sort_stats(pstats.SortKey.CUMULATIVE)
-    ps.print_stats(threshold)  # Only display functions above the cumulative time threshold
-
-    logger = config.get("logger", None)
-    if logger:
-        logger.info(s.getvalue())
-    else:
-        print(s.getvalue())
-
-
 if __name__ == "__main__":
     config, _ = get_config("config.yml")
 
@@ -511,4 +483,3 @@ if __name__ == "__main__":
 
     # Start the processing
     process_files(config)
-    #profile_code(config)

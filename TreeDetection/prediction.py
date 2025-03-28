@@ -13,9 +13,14 @@ import geopandas as gpd
 from shapely.geometry import box
 from detectron2.engine import DefaultPredictor
 
-from helpers import xy_gpu
+from TreeDetection.helpers import xy_gpu
 
 class Predictor(DefaultPredictor):
+    """
+    Predictor class for Detectron2 models with tiling support.
+    
+    Besides being a model wrapper, this class also supports large scale and asynchronous batching and contour extraction (returning vertices of a polygon, rather than single values).
+    """
     def __init__(self, cfg, device_type="cpu", max_batch_size=5, output_dir='./output', exclude_vars=None):
         """
         Initialize the Predictor class.

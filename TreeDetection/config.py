@@ -1,4 +1,3 @@
-
 import logging
 import os
 from datetime import datetime
@@ -181,6 +180,8 @@ def get_config(config_path: str):
     config["keep_intermediate"] = config.get("keep_intermediate", False)
     config["timestamped_output_directory"] = config.get("timestamped_output_directory", False)
     config["simplify_tolerance"] = config.get("simplify_tolerance", 0.2)
+    
+    config["building_shapes"] = config.get("building_shapes", None)
 
     config_obj = Config()
     config_obj._load_into_config(config)

@@ -27,7 +27,6 @@ from shapely.errors import ShapelyError
 from shapely.geometry import Polygon
 from shapely.geometry import box, shape
 
-
 def exclude_outlines(config):
     """
     Exclude crowns that are within the outlines of the exclude files.
@@ -59,7 +58,6 @@ def exclude_outlines(config):
             # Write the filtered crowns back to the original path, overwriting the original file
             crowns_filtered.to_file(file_path, driver='GPKG')
 
-
 def polygon_from_mask(masked_arr):
     """Convert RLE data from the output instances into Polygons.
 
@@ -86,7 +84,6 @@ def polygon_from_mask(masked_arr):
     else:
         return 0
 
-
 def get_filenames(directory: str):
     """Get the file names if no geojson is present.
 
@@ -104,7 +101,6 @@ def get_filenames(directory: str):
                 dataset_dicts.append({"file_name": file_path})
 
     return dataset_dicts
-
 
 def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger=None, verbose=False):
     """
@@ -256,7 +252,6 @@ def project_to_geojson(tiles_path, pred_fold, output_fold, max_workers=4, logger
     if logger and verbose:
         logger.debug("GeoJSON/GPKG projection complete.")
 
-
 def filename_geoinfo(filename):
     """Return geographic info of a tile from its filename.
 
@@ -272,6 +267,9 @@ def filename_geoinfo(filename):
     crs = parts[4]
     return (minx, miny, width, buffer, crs)
 
+def tif_geoinfo(filename):
+    with rasterio.open(filename, 'r') as source:
+        return source.transform, source.crs, source.width, source.height
 
 def tif_geoinfo(filename):
     with rasterio.open(filename, 'r') as source:
@@ -302,7 +300,6 @@ def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0)
     )
     geo = gpd.GeoDataFrame({"geometry": bbox}, index=[0], crs=CRS.from_epsg(crs))
     return geo
-
 
 def box_filter(filename, shift: int = 0):
     """Create a bounding box from a file name to filter edge crowns.
@@ -501,6 +498,28 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
             logger.warn(f"Error processing file {file}: {e}")
         return None
 
+def element_is_near_border(polygon, bounding_box, eps):
+    """
+    Check if the polygon is near the border of the bounding box.
+
+    Args:
+        polygon: The polygon to check.
+        bounding_box: The bounding box.
+        eps: The epsilon value for the check.
+    """
+    pol_x = polygon[0]
+    pol_y = polygon[1]
+    pol_max_x = polygon[2]
+    pol_max_y = polygon[3]
+
+    minx = bounding_box.left + eps
+    miny = bounding_box.bottom + eps
+    maxx = bounding_box.right - eps
+    maxy = bounding_box.top - eps
+
+    if (pol_x < minx) or (pol_max_x > maxx) or (pol_y < miny) or (pol_max_y > maxy):
+        return True
+    return False
 
 def element_is_near_border(polygon, bounding_box, eps):
     """
@@ -562,7 +581,6 @@ def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simpl
             logger.error(f"Error processing folder {folder}: {e}")
         return None
 
-
 def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=50, shift=1, simplify_tolerance=0.2, logger=None):
     validate_paths(tiles_path, pred_fold, output_path)
     folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
@@ -594,7 +612,6 @@ def calc_iou(shape1, shape2):
     iou = shape1.intersection(shape2).area / shape1.union(shape2).area
     return iou
 
-
 def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Round the coordinates of the geometries in the GeoDataFrame."""
 
@@ -614,7 +631,6 @@ def round_coordinates(crowns: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     crowns['geometry'] = crowns['geometry'].apply(round_geometry)
 
     return crowns
-
 
 def clean_crowns(crowns: gpd.GeoDataFrame,
                  iou_threshold: float = 0.7,
@@ -716,7 +732,6 @@ def clean_crowns(crowns: gpd.GeoDataFrame,
         crowns_out = crowns_out[crowns_out[field] > confidence]
 
     return crowns_out.reset_index(drop=True)
-
 
 def fuse_predictions(urban_fold, forrest_fold, forrest_path, output_dir, logger=None):
     """
@@ -925,7 +940,6 @@ def ndvi_array_from_rgbi(rgbi_array: np.ndarray):
             ndvi_array[i, j] = ndvi_index(rgbi_array[0, i, j] / 255.0, rgbi_array[3, i, j] / 255.0)
     return ndvi_array
 
-
 def create_ndvi_image_from_rgbi(rgbi_path: str, ndvi_path: str, export_tif: bool = True, export_png: bool = False):
     """
     Create an NDVI image from the RGBI image. Mainly for debugging purposes.
@@ -989,7 +1003,6 @@ def create_ndvi_image_from_rgbi(rgbi_path: str, ndvi_path: str, export_tif: bool
         except Exception as e:
             print(f"Failed to write {out_tif}: {e}")
 
-
 def plot_ndvi_values(values_array: np.ndarray):
     # Normalize the data to range [0, 1] for the colormap
     norm = Normalize(vmin=-1, vmax=1)
@@ -1009,7 +1022,6 @@ def plot_ndvi_values(values_array: np.ndarray):
     plt.axis('off')  # Turn off axes for visualization
     plt.savefig("viridis_image_high_res.png", dpi=dpi, bbox_inches='tight', pad_inches=0)
     plt.show()
-
 
 def retrieve_neighboring_image_filenames(filename, other_filenames):
     """
@@ -1050,7 +1062,6 @@ def retrieve_neighboring_image_filenames(filename, other_filenames):
 
     return left, right, up, down
 
-
 def merge_images(src1, src2):
     """
     Merge two images with the same CRS.
@@ -1075,7 +1086,6 @@ def merge_images(src1, src2):
         "transform": merged_transform,
     })
     return merged_data, merged_meta
-
 
 def crop_image(src, width, height):
     """
