@@ -24,7 +24,7 @@ setup(
         'scipy',
         'Shapely==2.0.6',
         'tqdm',
-        'detectron2 @ git+https://github.com/facebookresearch/detectron2.git'
+        #'detectron2 @ git+https://dl.fbaipublicfiles.com/detectron2/wheels/cu113/torch1.10/index.html'
     ],
     url='https://github.com/Jonetz/TreeDetection',
     extras_require={
