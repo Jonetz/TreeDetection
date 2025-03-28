@@ -11,6 +11,7 @@ setup(
         'fiona==1.9.6',
         'geopandas',
         'matplotlib',
+        'numpy==1.23.0',
         'numba>=0.60.0',
         'numpy',
         'opencv_python',
