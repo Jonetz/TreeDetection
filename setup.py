@@ -1,5 +1,5 @@
 from setuptools import setup, find_packages
-
+from TreeDetection import __version__, __init__
 setup(
     name="TreeDetection",
     version="0.1.0",
@@ -25,6 +25,7 @@ setup(
         'tqdm',
         'detectron2 @ git+https://github.com/facebookresearch/detectron2.git'
     ],
+    url='https://github.com/Jonetz/TreeDetection',
     extras_require={
         "dev": [
             "pytest",  # For testing purposes
