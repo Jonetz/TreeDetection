@@ -683,8 +683,8 @@ def process_features(features, id_to_area, height_data, height_transform, height
             'TreeHeight': height,
             'Centroid': {'x': float(centroid[0]), 'y': float(centroid[1])},  # Ensure JSON compatibility
             'Diameter': 2 * (area / np.pi) ** 0.5,
-            #'is_contained': containment_data['is_contained'],
-            #'num_contained': containment_data['num_contained'],
+            'is_contained': containment_data['is_contained'],
+            'num_contained': containment_data['num_contained'],
             #'containment_ratio': containment_data['containment_ratio'],
             #'MeanNDVI': mean_ndvi[i],
             #'VarNDVI': var_ndvi[i],
@@ -835,15 +835,16 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         'Confidence_score': 'float',
         'poly_id': 'str',
         'Area': 'float',
-        'ContainedCount': 'int',
         'TreeHeight': 'float',
         'Centroid': 'str',
+        'Diameter': 'float',
         'is_contained': 'str',
         'num_contained': 'int',
-        'MeanNDVI': 'float',
-        'MaxNDVI': 'float',
-        'MinNDVI': 'float',
-        'VarNDVI': 'float'
+        #'ContainedCount': 'int',
+        #'MeanNDVI': 'float',
+        #'MaxNDVI': 'float',
+        #'MinNDVI': 'float',
+        #'VarNDVI': 'float'
     }
     new_schema['properties'] = new_properties_schema
 
