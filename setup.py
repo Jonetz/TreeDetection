@@ -8,7 +8,7 @@ setup(
     install_requires=[
         'affine',
         'aiofiles',
-        'cupy-cuda113',
+        'cupy-cuda12x',
         'fiona==1.9.6',
         'geopandas',
         'matplotlib',
