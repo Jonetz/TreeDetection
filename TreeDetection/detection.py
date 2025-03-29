@@ -19,11 +19,7 @@ from TreeDetection.postprocessing import process_files_in_directory
 
 import geopandas as gpd
 import shutil
-try:
-    from torch.cuda.amp import autocast
-except ModuleNotFoundError:
-    from torch.amp import autocast
-    
+
 gpd.options.display_precision = 2
 
 def postprocess_files(config):
@@ -112,8 +108,7 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
         os.makedirs(tile_dir, exist_ok=True)
 
         try:
-            with autocast(device_type=config["device"]):
-                predictor(file_path, tile_dir)
+            predictor(file_path, tile_dir)
         except Exception as e:
             logger.error(f"Error processing {file_path}: {e}")
 
