@@ -318,7 +318,7 @@ def preprocess_files(config):
                 meta_info[f] = transform
             
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                results = list(executor.map(crop_single_image, images_path))
+                results = list(executor.map(crop_single_image, [images_path] * len(images_path), [rgbi] * len(images_path), [meta_info] * len(images_path), images_path))
             cropped_image_names.extend([item for sublist in results for item in sublist])
 
             return cropped_image_names
@@ -336,7 +336,7 @@ def preprocess_files(config):
             transform = meta_info[f]
             f_x_coord, f_y_coord = transform.c, transform.f
 
-                # We only look at the right and the bottom neighbors so that we don't process the same cropped image twice
+            # We only look at the right and the bottom neighbors so that we don't process the same cropped image twice
             if right is not None:
                 transform = meta_info[right]
                 right_x_coord, right_y_coord = transform.c, transform.f

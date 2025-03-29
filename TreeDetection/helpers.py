@@ -948,7 +948,6 @@ def create_ndvi_image_from_rgbi(rgbi_path: str, ndvi_path: str, export_tif: bool
         raise FileNotFoundError(f" RGB File not found: {rgbi_path}")
 
     with rasterio.open(rgbi_path) as rgb_src:
-        print(type(rgb_src))
         rgbi_array = rgb_src.read()
 
     ndvi_array = np.zeros(shape=(rgbi_array.shape[1], rgbi_array.shape[2]))
@@ -1027,7 +1026,7 @@ def retrieve_neighboring_image_filenames(filename, other_filenames, meta_info=No
         other_filenames (list): List of other filenames.
         meta_info (dict): Metadata information, used for avoiding repeated calls to tif_geoinfo.
     """
-    transform, crs, width, height = meta_info[filename]
+    transform, crs, width, height = tif_geoinfo(filename)
     x = transform.c
     y = transform.f
 
