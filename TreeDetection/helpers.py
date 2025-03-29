@@ -267,15 +267,6 @@ def filename_geoinfo(filename):
     crs = parts[4]
     return (minx, miny, width, buffer, crs)
 
-def tif_geoinfo(filename):
-    with rasterio.open(filename, 'r') as source:
-        return source.transform, source.crs, source.width, source.height
-
-def tif_geoinfo(filename):
-    with rasterio.open(filename, 'r') as source:
-        return source.transform, source.crs, source.width, source.height
-
-
 def box_make(minx: int, miny: int, width: int, buffer: int, crs, shift: int = 0):
     """Generate bounding box from geographic specifications.
 
@@ -1023,15 +1014,20 @@ def plot_ndvi_values(values_array: np.ndarray):
     plt.savefig("viridis_image_high_res.png", dpi=dpi, bbox_inches='tight', pad_inches=0)
     plt.show()
 
-def retrieve_neighboring_image_filenames(filename, other_filenames):
+def tif_geoinfo(filename):
+    with rasterio.open(filename, 'r') as source:
+        return source.transform, source.crs, source.width, source.height
+    
+def retrieve_neighboring_image_filenames(filename, other_filenames, meta_info=None):
     """
     Retrieve the filenames of the neighboring images.
 
     Args:
         filename (str): Filename of the image.
         other_filenames (list): List of other filenames.
+        meta_info (dict): Metadata information, used for avoiding repeated calls to tif_geoinfo.
     """
-    transform, crs, width, height = tif_geoinfo(filename)
+    transform, crs, width, height = meta_info[filename]
     x = transform.c
     y = transform.f
 
@@ -1045,8 +1041,7 @@ def retrieve_neighboring_image_filenames(filename, other_filenames):
     for other in other_filenames:
         if other == filename:
             continue
-
-        other_transform, other_crs, other_width, other_height = tif_geoinfo(other)
+        other_transform = meta_info[other]
 
         if abs(other_transform.c - (x - (width*other_transform.a))) < eps and abs(other_transform.f - y) < eps:
             left = other
