@@ -20,33 +20,33 @@ It is also possible to run on other versions such as CUDA 11.3 or CUDA 12.5, for
 
 ### Using Conda
 
-1. ) Clean the cache:
+1. Clean the cache:
    ```bash
    pip cache purge
    ```
 
-2.) Create a new Environment:
+2. Create a new Environment:
    ```bash
    conda create -n tree_detection python=3.9
    ```
 
-3.) Install the Nvidia Cuda Toolkit for GPU support, we suggest using cuda12x:
+3. Install the Nvidia Cuda Toolkit for GPU support, we suggest using cuda12x:
    ```bash
    conda install nvidia/label/cuda-12.1.0::cuda-toolkit -c nvidia/label/cuda-12.1.0
    ```
 
-4.) Install PyTorch via an alternative channel:
+4. Install PyTorch via an alternative channel:
    ```bash
    pip install setuptools wheel
    conda install pytorch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 pytorch-cuda=12.4 -c pytorch -c nvidia
    ```
 
-5.) Install Detectron via Conda:
+5. Install Detectron via Conda:
    ```bash
    conda install -c conda-forge detectron2
    ```
 
-6.) Install the package:
+6. Install the package:
    ```bash
    pip install git+https://www.github.com/Jonetz/TreeDetection/
    ```
