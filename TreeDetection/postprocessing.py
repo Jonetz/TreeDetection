@@ -535,6 +535,7 @@ def process_features(features, id_to_area, height_data, height_transform, height
 
     # Compute centroids for all polygons on GPU (using the batch processing function)
     centroids = get_centroids(polygon_x_gpu, polygon_y_gpu)
+    id_centroid_map = {feature['properties']['poly_id']: centroid.get() for feature, centroid in zip(features, centroids)}
 
     if height_transform.almost_equals(ndvi_transform) and check_similarity_bounds(height_bounds, ndvi_bounds):
         Config().logger.info("Process NDVI and Height information together.")
@@ -600,6 +601,10 @@ def process_features(features, id_to_area, height_data, height_transform, height
             continue
         if (mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold) and mean_ndvi[i] > -1.0:
             continue
+        
+        id_heights_map = {feature['properties']['poly_id']: heights[i] for i, feature in enumerate(features)}
+        id_mean_ndvi_map = {feature['properties']['poly_id']: mean_ndvi[i] for i, feature in enumerate(features)}
+        id_var_ndvi_map = {feature['properties']['poly_id']: var_ndvi[i]for i, feature in enumerate(features)}
         preselected_features.append(feature)
 
     # Call process_containment_features and retrieve attributes
@@ -662,13 +667,13 @@ def process_features(features, id_to_area, height_data, height_transform, height
         polygon_id = feature['properties']['poly_id']
         area = id_to_area.get(polygon_id, None)
         # Check if the feature is within the containment threshold and has valid data
-        if highest_points[i] is not None:
-            height = heights[i]  
+        if highest_points[features.index(feature)] is not None:
+            height = heights[features.index(feature)]  
         else:
             height = -1
 
-        centroid = centroids[i].get()  # Convert centroid from CuPy to NumPy
-
+        centroid = id_centroid_map.get(polygon_id, None)
+        
         try:
             rounded_coords = round_coordinates(feature['geometry']['coordinates'])
         except Exception as e:
