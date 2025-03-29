@@ -22,7 +22,6 @@ setup(
         'Rtree',
         'scikit_learn',
         'scipy',
-        "pygeos",
         'shapely',
         'tqdm',
     ],
