@@ -20,8 +20,6 @@ from TreeDetection.postprocessing import process_files_in_directory
 import geopandas as gpd
 import shutil
 
-import concurrent.futures
-
 gpd.options.display_precision = 2
 
 def postprocess_files(config):
@@ -304,7 +302,6 @@ def preprocess_files(config):
         height_paths = [path for path in height_paths if "__" not in path]
 
         merged_directory = config["merged_path"]
-
         def save_cropped_images(images_path, rgbi=True):
             """
             Save the cropped images based on the neighboring images.
@@ -313,8 +310,7 @@ def preprocess_files(config):
                 images_path (list): List of image paths.
             """
             cropped_image_names = []
-
-            def process_image(f):
+            for f in images_path:
                 left, right, up, down = retrieve_neighboring_image_filenames(f, images_path)
 
                 directory = os.path.dirname(f)
@@ -322,12 +318,11 @@ def preprocess_files(config):
                 os.makedirs(result_directory, exist_ok=True)
                 f_basename = os.path.basename(f).replace(".tif", "").split("_")[0]
                 f_name_end = os.path.basename(f).replace(".tif", "").split("_")[-1]
+                # f_x_coord, f_y_coord = tif_geoinfo(f)
                 transform, crs, width, height = tif_geoinfo(f)
                 f_x_coord, f_y_coord = transform.c, transform.f
 
-                local_cropped_image_names = []
-
-                # Process the right neighbor
+                # We only look at the right and the bottom neighbors so that we don't process the same cropped image twice
                 if right is not None:
                     transform, crs, width, height = tif_geoinfo(right)
                     right_x_coord, right_y_coord = transform.c, transform.f
@@ -352,9 +347,8 @@ def preprocess_files(config):
                                 with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
                                     dest.write(cropped_data)
 
-                                local_cropped_image_names.append(f"{result_directory}/{output_filename}")
+                                cropped_image_names.append(f"{result_directory}/{output_filename}")
 
-                # Process the down neighbor
                 if down is not None:
                     transform, crs, width, height = tif_geoinfo(down)
                     down_x_coord, down_y_coord = transform.c, transform.f
@@ -378,16 +372,7 @@ def preprocess_files(config):
                                 with rasterio.open(f"{result_directory}/{output_filename}", "w", **cropped_meta) as dest:
                                     dest.write(cropped_data)
 
-                                local_cropped_image_names.append(f"{result_directory}/{output_filename}")
-
-                return local_cropped_image_names
-
-            # Using ThreadPoolExecutor to process images concurrently
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                results = list(executor.map(process_image, images_path))
-
-            # Flatten the list of lists and return
-            cropped_image_names.extend([item for sublist in results for item in sublist])
+                                cropped_image_names.append(f"{result_directory}/{output_filename}")
 
             return cropped_image_names
 
