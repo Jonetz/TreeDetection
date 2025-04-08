@@ -12,7 +12,7 @@ setup(
         'fiona==1.9.6',
         'geopandas',
         'matplotlib',
-        'numpy',
+        'numpy<2.0.0',
         'numba>=0.60.0',
         'opencv_python',
         'pandas',
