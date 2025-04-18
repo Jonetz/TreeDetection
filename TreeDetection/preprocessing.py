@@ -6,10 +6,11 @@ import geopandas as gpd
 import numpy as np
 import rasterio
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from shapely.geometry import box
 from rasterio.mask import geometry_window
 import cupy as cp
+import yaml
 
 """
 Tiling orthomosaic data.
@@ -21,12 +22,12 @@ def get_features(gdf: gpd.GeoDataFrame):
     """Function to parse features from GeoDataFrame in such a manner that rasterio wants them."""
     return [json.loads(gdf.to_json())["features"][0]["geometry"]]
 
-async def write_metadata_async(meta_name, metadata):
-    """Asynchronously write metadata to a JSON file."""
-    async with aiofiles.open(meta_name, "w") as meta_file:
-        await meta_file.write(json.dumps(metadata))
-
-async def tile_single_file(
+def write_metadata(meta_name, metadata):
+    """write metadata to a JSON file."""
+    with open(meta_name, "w") as meta_file:
+        meta_file.write(json.dumps(metadata))   
+        
+def tile_single_file(
     data_path: str,
     out_dir: str,
     buffer: int = 0,
@@ -48,10 +49,11 @@ async def tile_single_file(
         tilename = Path(data.name).stem
         transform = data.transform
 
+        tile_metadata_dict = {}
+
         for minx in np.arange(data.bounds[0], data.bounds[2], tile_width):
             for miny in np.arange(data.bounds[1], data.bounds[3], tile_height):
-                out_path_root = out_path / f"{tilename}_{int(minx)}_{int(miny)}_{int(tile_width)}_{int(buffer)}_{crs}"
-
+                tile_id = f"{tilename}_{int(minx)}_{int(miny)}_{int(tile_width)}_{int(buffer)}_{crs}"
                 bbox = box(
                     minx - buffer,
                     miny - buffer,
@@ -93,18 +95,16 @@ async def tile_single_file(
                 geo = gpd.GeoDataFrame({"geometry": [bbox]}, index=[0], crs=data.crs)
                 coords = get_features(geo)
 
-                # Adjust bbox to align with the pixel grid
                 try:
                     window = geometry_window(data, coords, pad_x=0, pad_y=0)
                     out_transform = data.window_transform(window)
                 except Exception:
-                    ValueError('Input shapes do not overlap raster, check geometry of incoming Tifs.')
+                    raise ValueError('Input shapes do not overlap raster, check geometry of incoming Tifs.')
 
-                # Metadata is written asynchronously
-                meta_name = out_path_root.with_suffix(".json")
+                # Collect metadata for this tile
                 metadata = {
                     "crs": crs,
-                    "transform": out_transform,
+                    "transform": out_transform,  # serializable
                     "bounds": [
                         minx - buffer,
                         miny - buffer,
@@ -114,9 +114,12 @@ async def tile_single_file(
                     "only_forest": only_forest,
                     "only_urban": only_urban,
                 }
-                await write_metadata_async(meta_name, metadata)
+                tile_metadata_dict[tile_id] = metadata
+                
+        out_file = Path(out_dir) / f"{tilename}.json"
+        write_metadata(out_file, tile_metadata_dict)
 
-async def tile_data(
+def tile_data(
     file_list: list,
     out_dir: str,
     buffer: int = 30,
@@ -131,6 +134,15 @@ async def tile_data(
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
+    # --- Load recovery info if available ---
+    file_list, recovered_processed = load_recovery_data(file_list, buffer, tile_width, tile_height, logger, out_dir, os.path.join(out_dir, "recovery.yaml"))
+    if not file_list:
+        if logger:
+            logger.info("All files have already been processed. Exiting Tiling.")
+        else:
+            print("All files have already been processed. Exiting Tiling.")
+        return
+    
     forest_regions = None
     forest_bounds_gpu = None
 
@@ -148,12 +160,11 @@ async def tile_data(
             raise ValueError(f"No valid bounding boxes found in the forest shapefile {forest_shapefile}.")
         forest_bounds_gpu = cp.array(forest_bounds)
 
-    async def process_file(data_path):
-        img_out_dir = os.path.join(out_dir, Path(data_path).stem)
+    def process_file(data_path):
         try:
-            await tile_single_file(
+            tile_single_file(
                 data_path=data_path,
-                out_dir=img_out_dir,
+                out_dir=out_dir,
                 buffer=buffer,
                 tile_width=tile_width,
                 tile_height=tile_height,
@@ -168,18 +179,84 @@ async def tile_data(
                 print(f"Error processing file: {e}")
 
     if parallel:
-        # Choose executor type based on use_threadpool
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            loop = asyncio.get_event_loop()
-            tasks = [
-                loop.run_in_executor(executor, process_file, data_path)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(process_file, data_path)
                 for data_path in file_list
             ]
-            await asyncio.gather(*tasks)
-    else:
-        for data_path in file_list:
-            await process_file(data_path)
 
+            for i, future in enumerate(as_completed(futures)):
+                try:
+                    if logger and i % 100 == 0:
+                        logger.info(f"Tiling file {i + 1}/{len(file_list)} ({int((i + 1)/len(file_list))} % )")
+                    future.result()  # Raises exception if one occurred
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error in thread execution: {e}")
+                    else:
+                        print(f"Error in thread execution: {e}")
+    else:
+        for i, data_path in enumerate(file_list):
+            if logger and i % 100 == 0:
+                logger.info(f"Tiling file {i + 1}/{len(file_list)} ({int((i + 1)/len(file_list))} % )")
+            process_file(data_path)
+            
+    save_recovery_data(file_list, buffer, tile_width, tile_height, logger, recovered_processed, file_list, os.path.join(out_dir, "recovery.yaml"))
+
+def load_recovery_data(file_list, buffer, tile_width, tile_height, logger, out_dir, recovery_file):    
+    recovered_processed = set()
+    skip_count = 0
+    if os.path.exists(recovery_file):
+        try:
+            with open(recovery_file, "r") as f:
+                recovery_data = yaml.safe_load(f)
+            same_params = (
+                recovery_data.get("buffer") == buffer and
+                recovery_data.get("tile_width") == tile_width and
+                recovery_data.get("tile_height") == tile_height
+            )
+            if same_params:
+                recovered_processed = set(recovery_data.get("processed_files", []))
+                original_len = len(file_list)
+                
+                for f in file_list:
+                    if f in recovered_processed:
+                        Path(out_dir).mkdir(parents=True, exist_ok=True)
+                        tile_file = Path(out_dir) / f"{Path(f).stem}.json"
+                        if not os.path.exists(tile_file):
+                            recovered_processed.remove(f)                
+                file_list = [f for f in file_list if f not in recovered_processed]
+                skip_count = original_len - len(file_list)
+                if logger:
+                    logger.info(f"Recovered {skip_count} already-processed files. Skipping them.")
+                else:
+                    print(f"Recovered {skip_count} already-processed files. Skipping them.")
+        except Exception as e:
+            if logger:
+                logger.warning(f"Could not load recovery file: {e}")
+            else:
+                print(f"Could not load recovery file: {e}")
+    return file_list,recovered_processed
+            
+def save_recovery_data(file_list, buffer, tile_width, tile_height, logger, recovered_processed, processed_files, recovery_file):
+    try:
+        with open(recovery_file, "w") as f:
+            with open(recovery_file, "w") as f:
+                yaml.safe_dump({
+                    "buffer": buffer,
+                    "tile_width": tile_width,
+                    "tile_height": tile_height,
+                    "file_list": file_list + list(recovered_processed),
+                    "processed_files": processed_files + list(recovered_processed)
+                }, f, sort_keys=False)
+        if logger:
+            logger.info(f"Saved recovery file with {len(processed_files)} processed files.")
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to save recovery file: {e}")
+        else:
+            print(f"Failed to save recovery file: {e}")
+            
 if __name__ == "__main__":
     # Example usage
     file_list = ["file1.tif", "file2.tif", "file3.tif"]

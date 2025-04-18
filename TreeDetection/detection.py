@@ -17,6 +17,7 @@ from TreeDetection.preprocessing import tile_data
 from TreeDetection.helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
 from TreeDetection.helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
 from TreeDetection.postprocessing import process_files_in_directory
+from TreeDetection.utilities import load_prediction_recovery_data, save_prediction_recovery_data
 
 import geopandas as gpd
 import shutil
@@ -102,11 +103,20 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
     if not images_paths:
         logger.warning("No TIF files found for prediction.")
         return
-
+    
+    file_list, processed_files = load_prediction_recovery_data(output_path, tiles_path, model_path, logger)
+    
+    if not file_list:
+        images_paths = [f for f in images_paths if f not in processed_files]
+    
+    if not images_paths:
+        logger.info("All files have already been predicted. Exiting Prediction.")
+        return
+    
     # Parallel processing with asyncio
     def process_image(file_path):
-        tile_dir = os.path.join(tiles_path, os.path.basename(file_path).replace('.tif', ''))
-        os.makedirs(tile_dir, exist_ok=True)
+        tile_dir = os.path.join(tiles_path, os.path.basename(file_path).replace('.tif', '.json'))
+        #os.makedirs(tile_dir, exist_ok=True)
 
         try:
             predictor(file_path, tile_dir)
@@ -114,11 +124,13 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
             logger.error(f"Error processing {file_path}: {e}")
 
     # Launch tasks
-    for fp in images_paths:
+    for i, fp in enumerate(images_paths):        
+        if logger and i % 100 == 0:
+            logger.info(f"Predicting file {i + 1}/{len(images_paths)} ({int((i + 1)/len(images_paths))} % )")
         process_image(fp)
 
     logger.info(f"Completed prediction for {len(images_paths)} images.")
-
+    save_prediction_recovery_data(output_path, tiles_path, model_path, processed_files, images_paths)
 
 def predict_tiles(config):
     """
@@ -421,11 +433,10 @@ def preprocess_files(config):
     # Continue with tiling if there are valid images
     logger.info(f"Found {len(images_paths)} images for processing. Starting tiling...")
     if images_paths:
-        asyncio.run(
-            tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"],
-                      parallel=False,
+        tile_data(images_paths, config["tiles_path"], config["buffer"], config["tile_width"], config["tile_height"],
+                      parallel=config["parallel"],
                       max_workers=config["num_workers"], logger=config["logger"],
-                      forest_shapefile=config.get("forrest_outline", None)))
+                      forest_shapefile=config.get("forrest_outline", None))
 
     return images_paths
 

@@ -52,13 +52,12 @@ class Predictor(DefaultPredictor):
             tifpath: a path that should contain every tif that was used in the tiling function.
             tilepath: a path that contains valid metadata to the tiling.
         """
-        pred_subdir = os.path.join(self.output_dir, os.path.basename(tifpath).replace('.tif', ''))
+        pred_subdir = os.path.join(self.output_dir, os.path.basename(tifpath).replace('.tif', '').replace('.json', ''))
         os.makedirs(pred_subdir, exist_ok=True)
-        tiles = asyncio.run(self._load_tiles_async(tilepath))
-
+        #tiles = asyncio.run(self._load_tiles_async(tilepath))
+        tiles = self._load_tiles(tilepath)
         predictions = []
         batch = []
-
         with rasterio.open(tifpath) as img:
             for i, tile in enumerate(tiles):
                 tile_tensor, tile_info = self._process_tile(tile, img)
@@ -125,6 +124,37 @@ class Predictor(DefaultPredictor):
                 **exclude_flags,  # Include the exclude flags dynamically
             }
 
+    def _load_tiles(self, tilepath):
+        """Load all tile metadata from the new JSON structure (one file with dict of tiles)."""
+        with open(tilepath) as f:
+            d = json.load(f)
+        all_tile_dicts = [(key, d[key]) for key in d.keys()]
+
+        tiles = []
+        for filepath, tile_dict in all_tile_dicts:
+            
+            # Build geometry and extract bounding box
+            bbox = box(*tile_dict["bounds"][:4])
+            geo = gpd.GeoDataFrame({"geometry": [bbox]}, crs="EPSG:4326")
+            coords = self._get_features(geo)
+            
+            tile_id = filepath
+
+            # Add metadata for model input
+            tile_entry = {
+                "coords": coords,
+                "tile_id": tile_id,
+                "json_name": tilepath
+            }
+
+            if self.exclude_vars:
+                tile_entry.update({var: tile_dict.get(var, False) for var in self.exclude_vars})
+
+            tiles.append(tile_entry)
+        # Apply filtering
+        if self.exclude_vars:
+            tiles = self._filter_excluded_vars(tiles)
+        return tiles
 
     def _process_tile(self, tile, img):
         """Preprocess a single tile."""
@@ -139,7 +169,7 @@ class Predictor(DefaultPredictor):
             tile_image = self.aug.get_transform(rgb_rescaled).apply_image(rgb_rescaled)
             tile_tensor = torch.as_tensor(tile_image.astype("float32").transpose(2, 0, 1))
             _, orig_height, orig_width = out_img.shape       
-            return tile_tensor, {"orig_height": orig_height, "orig_width": orig_width, "height": height, "width": width, "json_name": tile["json_name"]}
+            return tile_tensor, {"orig_height": orig_height, "orig_width": orig_width, "height": height, "width": width, "json_name": tile["json_name"], "tile_id": tile["tile_id"]}
         
         except Exception as e:
             print(f"Error processing tile {tile['json_name']}: {e}")
@@ -168,12 +198,18 @@ class Predictor(DefaultPredictor):
         """Process and save a single prediction from a batch."""
         orig_height = b["orig_height"]
         orig_width = b["orig_width"]
-        output_file = os.path.join(pred_subdir, f"Prediction_{os.path.basename(b['json_name'])}")
+        output_file = os.path.join(pred_subdir, f"Prediction_{os.path.basename(b['tile_id'])}.json")
 
         if not pred["instances"].has("pred_masks"):
             print("Warning: no masks given, probably false model!")
             return []
 
+        # Open the metadata to extract the EPSG and raster transform
+        metadata_path = b['json_name']                                
+        with open(metadata_path, "r") as meta_file:
+            metadatas = json.load(meta_file)
+            metadata = metadatas[b['tile_id']]    
+            transform = metadata["transform"] 
         polygons = []
         scores = []
         categories = []
@@ -195,20 +231,15 @@ class Predictor(DefaultPredictor):
             # Convert mask to polygon
             contours, _ = cv2.findContours(
                 resized_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
-            )            
+            )                      
             for contour in contours:
                 if contour.size >= 8:  # Minimum polygon size
                     contour = contour.flatten().tolist()
                     if contour[:2] != contour[-2:]:  # Ensure closed polygon
-                        contour.extend(contour[:2])
-                    
-                    # Open the metadata to extract the EPSG and raster transform
-                    metadata_path = b['json_name']
-                    with open(metadata_path, "r") as meta_file:
-                        metadata = json.load(meta_file)
+                        contour.extend(contour[:2])                       
 
                     epsg = metadata["crs"]
-                    raster_transform = Affine(*metadata["transform"])
+                    raster_transform = Affine(transform[0], transform[1], transform[2], transform[3], transform[4], transform[5])
 
                     # Convert polygon coordinates to geographical coordinates
                     x_coords, y_coords = xy_gpu(raster_transform, contour[1::2], contour[::2])

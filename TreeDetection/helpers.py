@@ -433,20 +433,23 @@ def validate_paths(tiles_path, pred_fold, output_path):
     if not os.path.exists(output_path):
         os.makedirs(output_path, exist_ok=True)
        
-def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, logger=None):
+def process_prediction_file_sync(file, tiles_path, tif_lookup, shift, simplify_tolerance, logger=None):
     """ Process a single prediction file and return a GeoDataFrame."""
     try:
         # Match JSON file to corresponding TIFF file
         tifpath = tif_lookup.get(Path(file).stem.replace("Prediction_", ""))
+        folder = Path(file).parent.name 
         if not tifpath:
             raise FileNotFoundError(f"No matching TIFF file for {file}")
         
-        metadata_path = tifpath.with_name(f"{tifpath.stem}.json")
+        metadata_path = Path(tiles_path) / tifpath.with_name(f"{folder}.json")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"No matching metadata for {tifpath} (metadata_path: {metadata_path})")
         with open(metadata_path, "r") as meta_file:
             metadata = json.load(meta_file)
-        
-        epsg = metadata["crs"]
-        raster_transform = Affine(*metadata["transform"])
+            if str(tifpath) not in metadata:
+                raise FileNotFoundError(f"No matching metadata for {tifpath} in {metadata_path}")
+            epsg = metadata[str(tifpath)]["crs"]
         
         # Load predictions
         with open(file, "r") as pred_file:
@@ -472,13 +475,13 @@ def process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, lo
 
             # Check if it's near the tile border
             features.append({"geometry": polygon, "Confidence_score": crown_data["score"]})
-
         gdf = gpd.GeoDataFrame(features, geometry=[feature["geometry"] for feature in features], crs=f"EPSG:{epsg}")
         
         if simplify_tolerance > 0:
             gdf["geometry"] = gdf["geometry"].simplify(simplify_tolerance, preserve_topology=True)
 
-        bounding_box = box_filter(tifpath, shift)
+        bounding_box = box_filter(str(tifpath), shift)
+        
         filtered_gdf = gpd.sjoin(gdf, bounding_box, "inner", "within")
         if 'index_right' in filtered_gdf.columns:
             filtered_gdf = filtered_gdf.rename(columns={'index_right': 'filter_index_right'})
@@ -540,16 +543,16 @@ def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simpl
     try:
         if logger:
             logger.info(f"Starting {folder}. ")
-        image_folder_path = os.path.join(tiles_path, folder)
+        image_folder_path = os.path.join(tiles_path, f'{folder}')
+        folder = folder.replace(".json", "")
         prediction_folder_path = os.path.join(pred_fold, folder)
-        tiff_files = list(Path(image_folder_path).rglob("*.json"))
+        with open(image_folder_path, "r") as meta_file:
+            tiff_files = list(json.load(meta_file).keys())
         tif_lookup = {Path(tif).stem: Path(tif) for tif in tiff_files}
-
         pred_files = list(Path(prediction_folder_path).rglob("*.json"))
-        
         # Process each prediction file
         results = [
-            process_prediction_file_sync(file, tif_lookup, shift, simplify_tolerance, logger)
+            process_prediction_file_sync(file, tiles_path, tif_lookup, shift, simplify_tolerance, logger)
             for file in pred_files
         ]
         valid_results = [res for res in results if res is not None]
@@ -561,7 +564,7 @@ def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simpl
         else:
             combined_gdf = gpd.GeoDataFrame(pd.concat(valid_results, ignore_index=True))
         
-        output_file = os.path.join(output_path, f"{folder}.gpkg")
+        output_file = os.path.join(output_path, f"{folder.replace('.json','')}.gpkg")
         combined_gdf.to_file(output_file, driver="GPKG")
         if logger:
             logger.info(f"Processed folder {folder} -> {output_file}")
@@ -574,8 +577,7 @@ def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simpl
 
 def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_workers=50, shift=1, simplify_tolerance=0.2, logger=None):
     validate_paths(tiles_path, pred_fold, output_path)
-    folders = [f for f in os.listdir(tiles_path) if os.path.isdir(os.path.join(tiles_path, f))]
-
+    folders = [f for f in os.listdir(tiles_path) if f.endswith(".json") and os.path.isfile(os.path.join(tiles_path, f))]
     async def process_all_folders():
         loop = asyncio.get_running_loop()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
