@@ -882,6 +882,19 @@ def process_files_in_directory(directory, height_directory, image_directory, par
         height_directory (str): Directory containing corresponding height data files.
         parallel (bool): Whether to process files in parallel (default is True).
     """
+    
+    def build_file_index(directory, pattern, ending=".tif"):
+        """Build a file index for the given directory."""        
+        # Filter image paths based on the `image_regex` pattern applied to the base name
+        paths = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(ending)]
+        # Process image identifiers
+        image_identifiers = {}
+        for f in paths:
+            match = pattern.search(os.path.basename(f))
+            if match:
+                # Smash all groups together without any separator
+                image_identifiers["".join(match.groups())] = f        
+        return image_identifiers
     geojson_files = [f for f in os.listdir(directory) if f.endswith('.gpkg')]
     geojson_files = [file for file in geojson_files if not file.startswith("processed_")]
 
@@ -903,13 +916,20 @@ def process_files_in_directory(directory, height_directory, image_directory, par
 
     image_pattern = re.compile(image_pattern)
     height_data_pattern = re.compile(height_data_pattern)
+    
+    image_index = build_file_index(image_directory, image_pattern)
+    height_index = build_file_index(height_directory, height_data_pattern)
+    image_merged_index = build_file_index(image_directory, image_merged_pattern)
+    height_merged_index = build_file_index(height_directory, height_merged_pattern)
 
-    def find_matching_file(base_name, geojson_pattern, search_pattern, directory):
+    def find_matching_file(base_name, geojson_pattern, search_pattern, directory, index=None):
         """Find a matching height data file based on regex groups from the base name."""
         geojson_match = geojson_pattern.match(base_name + ".tif")
         if geojson_match:
             geojson_groups = geojson_match.groups()  # Capture groups for matching
             geojson_concat = ''.join(geojson_groups)
+            if index is not None and geojson_concat in index:
+                return index[geojson_concat]                
             for root, _, files in os.walk(directory):
                 for file in files:
                     search_match = search_pattern.match(file)
@@ -926,14 +946,14 @@ def process_files_in_directory(directory, height_directory, image_directory, par
         for filename in geojson_files:
             file_path = os.path.join(directory, filename)
             base_name = os.path.splitext(os.path.basename(filename))[0]
-            height_file_path = find_matching_file(base_name, image_pattern, height_data_pattern, height_directory)
-            image_file_path = find_matching_file(base_name, image_pattern, image_pattern, image_directory)
+            height_file_path = find_matching_file(base_name, image_pattern, height_data_pattern, height_directory, height_index)
+            image_file_path = find_matching_file(base_name, image_pattern, image_pattern, image_directory, image_index)
 
             if height_file_path is None or image_file_path is None:
                 height_file_path = find_matching_file(base_name, image_merged_pattern, height_merged_pattern,
-                                                      height_directory)
+                                                      height_directory, height_merged_index)
                 image_file_path = find_matching_file(base_name, image_merged_pattern, image_merged_pattern,
-                                                     image_directory)
+                                                     image_directory, image_merged_index)
 
             if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
