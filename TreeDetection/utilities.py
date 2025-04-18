@@ -212,13 +212,12 @@ def load_prediction_recovery_data(output_path, tiles_path, model_path, logger):
             if os.path.exists(json_path):
                 # Validate number of files in the folder and the JSON keys match
                 folder_files = len(os.listdir(os.path.join(output_path, os.path.basename(file_path.replace('.tif', '')))))
-                print(f"Folder files: {folder_files}, JSON keys: {len(keys)}")
                 if folder_files == len(keys):  # Compare number of files with the number of keys
                     processed_files.add(file_path)
                 else:
                     logger.debug(f"Mismatch between output folder and JSON for {file_path}. Probably not all files are processed either intentionally or not.")
             else:
-                logger.warning(f"Missing JSON metadata for {file_path}. Skipping.")
+                logger.debug(f"Missing JSON metadata for {file_path}. Skipping.")
 
         # Filter out already processed files from the list
         original_len = len(file_list)
@@ -263,6 +262,5 @@ def save_prediction_recovery_data(output_path, tiles_path, model_path, processed
         with open(recovery_file, "w") as f:
             yaml.safe_dump(recovery_data, f, sort_keys=False)
 
-        print(f"Saved recovery data for {len(processed_files)} processed files.")
     except Exception as e:
         print(f"Failed to save prediction recovery file: {e}")

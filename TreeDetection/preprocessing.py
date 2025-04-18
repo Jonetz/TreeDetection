@@ -227,8 +227,8 @@ def load_recovery_data(file_list, buffer, tile_width, tile_height, logger, out_d
                             recovered_processed.remove(f)                
                 file_list = [f for f in file_list if f not in recovered_processed]
                 skip_count = original_len - len(file_list)
-                if logger:
-                    logger.info(f"Recovered {skip_count} already-processed files. Skipping them.")
+                if logger and skip_count > 0:
+                    logger.debug(f"Recovered {skip_count} already-processed files. Skipping them.")
                 else:
                     print(f"Recovered {skip_count} already-processed files. Skipping them.")
         except Exception as e:
@@ -250,7 +250,7 @@ def save_recovery_data(file_list, buffer, tile_width, tile_height, logger, recov
                     "processed_files": processed_files + list(recovered_processed)
                 }, f, sort_keys=False)
         if logger:
-            logger.info(f"Saved recovery file with {len(processed_files)} processed files.")
+            logger.debug(f"Saved recovery file with {len(processed_files)} processed files.")
     except Exception as e:
         if logger:
             logger.warning(f"Failed to save recovery file: {e}")

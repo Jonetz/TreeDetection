@@ -567,7 +567,7 @@ def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simpl
         output_file = os.path.join(output_path, f"{folder.replace('.json','')}.gpkg")
         combined_gdf.to_file(output_file, driver="GPKG")
         if logger:
-            logger.info(f"Processed folder {folder} -> {output_file}")
+            logger.debug(f"Processed file {folder} -> {output_file}")
 
         return output_file
     except Exception as e:
