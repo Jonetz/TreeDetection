@@ -603,9 +603,9 @@ def process_features(features, id_to_area, height_data, height_transform, height
         if (mean_ndvi[i] < config.ndvi_mean_threshold or var_ndvi[i] > config.ndvi_var_threshold) and mean_ndvi[i] > -1.0:
             continue
         
-        id_heights_map = {feature['properties']['poly_id']: heights[i] for i, feature in enumerate(features)}
-        id_mean_ndvi_map = {feature['properties']['poly_id']: mean_ndvi[i] for i, feature in enumerate(features)}
-        id_var_ndvi_map = {feature['properties']['poly_id']: var_ndvi[i]for i, feature in enumerate(features)}
+        #id_heights_map = {feature['properties']['poly_id']: heights[i] for i, feature in enumerate(features)}
+        #id_mean_ndvi_map = {feature['properties']['poly_id']: mean_ndvi[i] for i, feature in enumerate(features)}
+        #id_var_ndvi_map = {feature['properties']['poly_id']: var_ndvi[i]for i, feature in enumerate(features)}
         preselected_features.append(feature)
 
     # Call process_containment_features and retrieve attributes
