@@ -14,6 +14,7 @@ from rasterio.coords import BoundingBox
 from rasterio.enums import Resampling
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
+import yaml
 
 from TreeDetection.config import Config
 from TreeDetection.helpers import ndvi_array_from_rgbi, check_similarity_bounds, element_is_near_border
@@ -538,14 +539,14 @@ def process_features(features, id_to_area, height_data, height_transform, height
     id_centroid_map = {feature['properties']['poly_id']: centroid.get() for feature, centroid in zip(features, centroids)}
 
     if height_transform.almost_equals(ndvi_transform) and check_similarity_bounds(height_bounds, ndvi_bounds):
-        Config().logger.info("Process NDVI and Height information together.")
+        Config().logger.debug("Process NDVI and Height information together.")
         height_values, ndvi_values = get_metadata_within_polygon(polygon_x_gpu, polygon_y_gpu, ndvi_data_gpu, height_data_gpu, ndvi_transform, height_data.shape[0], height_data.shape[1], ndvi_bounds)
 
         min_ndvi, max_ndvi, mean_ndvi, var_ndvi = ndvi_values
         heights, highest_points = height_values
     else:
         # Perform height data lookups for all polygons at once on the GPU
-        Config().logger.info("Process NDVI and Height information separately.")
+        Config().logger.debug("Process NDVI and Height information separately.")
         heights, highest_points = get_height_within_polygon(polygon_x_gpu, polygon_y_gpu, height_data_gpu, height_transform, height_data.shape[0],
                                                                         height_data.shape[1], height_bounds)
 
@@ -736,7 +737,7 @@ def process_geojson(data, confidence_threshold, iou_threshold, area_threshold, h
     id_to_area = {}
     i = 0
     for feature in filtered_features:
-        polygon = shape(feature['geometry']).simplify(0.5)
+        polygon = shape(feature['geometry']).simplify(2)
         area = calculate_area(polygon)
         polygon_id = str(i)
         feature['properties']['poly_id'] = polygon_id
@@ -811,6 +812,56 @@ def order_properties(feature, schema_properties):
     feature['properties'] = ordered_properties
     return feature
 
+
+def load_recovery_data_with_params(directory, config_obj, logger=None):
+    recovery_file = os.path.join(directory, "recovery.yaml")
+    processed_files = set()
+    params = {
+        "tile_width": config_obj.tile_width,
+        "tile_height": config_obj.tile_height,
+        "buffer": config_obj.buffer,
+        "confidence_threshold": config_obj.confidence_threshold,
+        "containment_threshold": config_obj.containment_threshold,
+        "height_threshold": config_obj.height_threshold,
+        "ndvi_mean_threshold": config_obj.ndvi_mean_threshold,
+        "ndvi_var_threshold": config_obj.ndvi_var_threshold,
+        "iou_threshold": config_obj.iou_threshold,
+        "confidence_threshold_stitching": config_obj.confidence_threshold_stitching,
+        "area_threshold": config_obj.area_threshold
+    }
+
+    if os.path.exists(recovery_file):
+        try:
+            with open(recovery_file, "r") as f:
+                data = yaml.safe_load(f)
+
+            if data.get("parameters") == params:
+                processed_files = set(data.get("processed_files", []))
+                if logger:
+                    logger.info(f"Loaded {len(processed_files)} previously processed files from recovery.")
+            else:
+                if logger:
+                    logger.info("Parameter mismatch with recovery file. Resetting processed files.")
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed to load recovery file: {e}")
+    
+    return params, processed_files
+
+def save_recovery_data_with_params(directory, params, processed_files, logger=None):
+    recovery_file = os.path.join(directory, "recovery.yaml")
+    try:
+        with open(recovery_file, "w") as f:
+            yaml.safe_dump({
+                "parameters": params,
+                "processed_files": sorted(processed_files)
+            }, f, sort_keys=False)
+        if logger:
+            logger.info(f"Saved recovery file with {len(processed_files)} entries.")
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to save recovery file: {e}")
+
 def process_single_file(file_path, processed_file_path, height_data_path, rgbi_data_path):
     """
     Process a single GeoJSON file and save the results to a new file.
@@ -822,56 +873,62 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         containment_threshold (float): Threshold for polygon containment.
         height_data_path (str): Path to the raster file containing height data.
     """
-    config = Config()
+    try:
+        config = Config()
 
-    with fiona.open(file_path, 'r') as source:
-        features = [to_dict(feature) for feature in source]
-        schema = source.schema
-        crs = source.crs.to_string()
+        with fiona.open(file_path, 'r') as source:
+            features = [to_dict(feature) for feature in source]
+            schema = source.schema
+            crs = source.crs.to_string()
 
-    data = {
-        "type": "FeatureCollection",
-        "features": features
-    }
-    processed_data = process_geojson(data, config.confidence_threshold, config.iou_threshold, config.area_threshold, height_data_path, rgbi_data_path)
+        data = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        config.logger.info(f"Processing file {file_path} with {len(data['features'])} features.")
+        processed_data = process_geojson(data, config.confidence_threshold, config.iou_threshold, config.area_threshold, height_data_path, rgbi_data_path)
 
-    new_schema = schema.copy()
-    new_properties_schema = {
-        'Confidence_score': 'float',
-        'poly_id': 'str',
-        'Area': 'float',
-        'TreeHeight': 'float',
-        'Centroid': 'str',
-        'Diameter': 'float',
-        'is_contained': 'str',
-        'num_contained': 'int',
-        #'ContainedCount': 'int',
-        #'MeanNDVI': 'float',
-        #'MaxNDVI': 'float',
-        #'MinNDVI': 'float',
-        #'VarNDVI': 'float'
-    }
-    new_schema['properties'] = new_properties_schema
+        new_schema = schema.copy()
+        new_properties_schema = {
+            'Confidence_score': 'float',
+            'poly_id': 'str',
+            'Area': 'float',
+            'TreeHeight': 'float',
+            'Centroid': 'str',
+            'Diameter': 'float',
+            'is_contained': 'str',
+            'num_contained': 'int',
+            #'ContainedCount': 'int',
+            #'MeanNDVI': 'float',
+            #'MaxNDVI': 'float',
+            #'MinNDVI': 'float',
+            #'VarNDVI': 'float'
+        }
+        new_schema['properties'] = new_properties_schema
 
-    # Filter features based on the provided conditions
-    filtered_features = []
-    for feature in processed_data["features"]:
-        # Convert 'Centroid' to a JSON string if it exists
-        if 'Centroid' in feature['properties']:
-            feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
+        # Filter features based on the provided conditions
+        filtered_features = []
+        for feature in processed_data["features"]:
+            # Convert 'Centroid' to a JSON string if it exists
+            if 'Centroid' in feature['properties']:
+                feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
 
-        # Convert all NumPy types to native Python types
-        feature['properties'] = convert_to_python_types(feature['properties'])
+            # Convert all NumPy types to native Python types
+            feature['properties'] = convert_to_python_types(feature['properties'])
 
-        # Ensure properties are ordered correctly
-        feature = order_properties(feature, new_properties_schema)
+            # Ensure properties are ordered correctly
+            feature = order_properties(feature, new_properties_schema)
 
-        filtered_features.append(feature)
+            filtered_features.append(feature)
 
-    # Write the filtered features to the new GeoJSON file
-    with fiona.open(processed_file_path, 'w', driver='GPKG', schema=new_schema, crs=crs) as dest:
-        for feature in filtered_features:
-            dest.write(feature)
+        # Write the filtered features to the new GeoJSON file
+        with fiona.open(processed_file_path, 'w', driver='GPKG', schema=new_schema, crs=crs) as dest:
+            for feature in filtered_features:
+                dest.write(feature)
+        return file_path
+    except Exception as e:
+        print(f"Error postprocessing file {file_path}: {e}")
+        return None
 
 def process_files_in_directory(directory, height_directory, image_directory, parallel=True, filename_pattern=None):
     """
@@ -898,6 +955,12 @@ def process_files_in_directory(directory, height_directory, image_directory, par
     geojson_files = [f for f in os.listdir(directory) if f.endswith('.gpkg')]
     geojson_files = [file for file in geojson_files if not file.startswith("processed_")]
 
+    # Do a recovery of processed files
+    config_obj = Config()
+    params, processed_files = load_recovery_data_with_params(directory, config_obj, logger=config_obj.logger)
+    geojson_files = [f for f in os.listdir(directory) if f.endswith('.gpkg') and not f.startswith("processed_")]
+    geojson_files = [f for f in geojson_files if os.path.join(directory, f) not in processed_files]
+    
     if filename_pattern is None:
         height_data_pattern = "(\\d+)\\.tif"
         image_pattern = "(\\d+)\\.tif"
@@ -957,14 +1020,15 @@ def process_files_in_directory(directory, height_directory, image_directory, par
 
             if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
-                process_single_file(file_path, processed_file_path, height_file_path, image_file_path)
+                result = process_single_file(file_path, processed_file_path, height_file_path, image_file_path)                
+                processed_files.add(result)
                 torch.cuda.empty_cache()
             else:
                 warnings.warn(
                     f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
     else:
         # Parallel processing
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
 
             futures = []
             for filename in geojson_files:
@@ -988,4 +1052,7 @@ def process_files_in_directory(directory, height_directory, image_directory, par
 
             # Ensure all futures complete
             for future in futures:
-                future.result()
+                result = future.result()
+                if result is not None:
+                    processed_files.add(result)
+    save_recovery_data_with_params(directory, params, processed_files, logger=config_obj.logger)
