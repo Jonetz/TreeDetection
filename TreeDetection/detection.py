@@ -1,26 +1,22 @@
-import asyncio
+import concurrent
 import datetime
 import os
 import re
-import sys
+import shutil
 import time
 import warnings
 from pathlib import Path
 
-import concurrent
+import geopandas as gpd
 import rasterio
 
-from TreeDetection.prediction import Predictor
-
 from TreeDetection.config import get_config, setup_model_cfg, Config
-from TreeDetection.preprocessing import tile_data
-from TreeDetection.helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
 from TreeDetection.helpers import process_and_stitch_predictions, fuse_predictions, exclude_outlines
+from TreeDetection.helpers import retrieve_neighboring_image_filenames, merge_images, crop_image, tif_geoinfo
 from TreeDetection.postprocessing import process_files_in_directory
+from TreeDetection.prediction import Predictor
+from TreeDetection.preprocessing import tile_data
 from TreeDetection.utilities import load_prediction_recovery_data, save_prediction_recovery_data
-
-import geopandas as gpd
-import shutil
 
 gpd.options.display_precision = 2
 
@@ -311,8 +307,6 @@ def preprocess_files(config):
 
     if config["use_overlap"]:
         # Filter out images that have already been processed (can be identified by the __ in the filename)
-        images_paths = [path for path in images_paths if "__" not in path]
-        height_paths = [path for path in height_paths if "__" not in path]
 
         merged_directory = config["merged_path"]
         

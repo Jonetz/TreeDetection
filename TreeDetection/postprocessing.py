@@ -9,16 +9,18 @@ import fiona
 import numpy as np
 import rasterio
 import torch
+import yaml
 from fiona.model import to_dict
 from rasterio.coords import BoundingBox
 from rasterio.enums import Resampling
 from shapely import MultiPolygon
 from shapely.geometry import shape, Polygon
-import yaml
 
 from TreeDetection.config import Config
 from TreeDetection.helpers import ndvi_array_from_rgbi, check_similarity_bounds, element_is_near_border
-from TreeDetection.utilities import geo_to_raster, raster_to_geo, is_point_in_polygon_batch, calculate_area, calculate_iou, round_coordinates, convert_to_python_types, get_centroids
+from TreeDetection.utilities import geo_to_raster, raster_to_geo, is_point_in_polygon_batch, calculate_area, \
+    calculate_iou, round_coordinates, convert_to_python_types, get_centroids
+
 
 def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, height_data: np.ndarray,
                               transform: np.ndarray, width, height, bounds):
@@ -972,8 +974,8 @@ def process_files_in_directory(directory, height_directory, image_directory, par
     if image_pattern is None:
         image_pattern = "(\\d+)\\.tif"
 
-    image_merged_pattern = "FDOP20_(\\d+)_(\\d+)_(\\d+)_(\\d+)_rgbi\\.tif"
-    height_merged_pattern = "nDSM_(\\d+)(\\d+)_1km\\.tif"
+    image_merged_pattern = Config().image_merged_regex
+    height_merged_pattern = Config().height_data_merged_regex
     image_merged_pattern = re.compile(image_merged_pattern)
     height_merged_pattern = re.compile(height_merged_pattern)
 
