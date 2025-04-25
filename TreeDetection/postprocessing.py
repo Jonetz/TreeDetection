@@ -245,8 +245,8 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
     min_col, max_col = sorted([min(min_col, width - 1), max(max_col, 0)])
 
     # Extract ndvi & height data subset based on bounding box
-    ndvi_subset = ndvi_data[min_row:max_row + 1, min_col:max_col + 1]
-    height_subset = height_data[min_row:max_row + 1, min_col:max_col + 1]
+    ndvi_subset = ndvi_data[min_col:max_col + 1, min_row:max_row + 1]
+    height_subset = height_data[min_col:max_col + 1, min_row:max_row + 1]
 
     if ndvi_subset.size == 0:
         return -1, None
@@ -546,6 +546,7 @@ def process_features(features, id_to_area, height_data, height_transform, height
 
         min_ndvi, max_ndvi, mean_ndvi, var_ndvi = ndvi_values
         heights, highest_points = height_values
+
     else:
         # Perform height data lookups for all polygons at once on the GPU
         Config().logger.debug("Process NDVI and Height information separately.")
