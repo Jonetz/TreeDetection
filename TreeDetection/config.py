@@ -123,6 +123,7 @@ def get_config(config_path: str):
     config = load_config(config_path)
 
     # Validate the configuration
+    print(config.get("image_directory"), os.path.exists("data"), os.listdir())
 
     # 1. Check file handling paths
     assert config.get("image_directory") and os.path.exists(config.get("image_directory")), "Input path is missing from the configuration or path is incorrect."
@@ -156,6 +157,8 @@ def get_config(config_path: str):
     config["overlapping_tiles_width"] = config.get("overlapping_tiles_width", 3)
     config["overlapping_tiles_height"] = config.get("overlapping_tiles_height", 3)
     config["merged_path"] = config.get("merged_path", "merged")
+    config["image_merged_regex"] = config.get("image_merged_regex", "FDOP20_(\\d+)_(\\d+)_(\\d+)_(\\d+)_(\\d+)\\.tif")
+    config["height_data_merged_regex"] = config.get("height_data_merged_regex", "FDOP20_(\\d+)_(\\d+)\\.tif")
 
 
     # 4. Check the post-processing parameters
