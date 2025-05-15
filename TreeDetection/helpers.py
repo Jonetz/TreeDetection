@@ -30,36 +30,43 @@ from shapely.geometry import box, shape
 from TreeDetection.recoveries import load_stitching_recovery, save_stitching_recovery, load_fusion_recovery, save_fusion_recovery
 from TreeDetection.utilities import calc_iou
 
-def exclude_outlines(config):
+def exclude_outlines(config, logger=None):
     """
     Exclude crowns that are within the outlines of the exclude files.
 
     Warning: If the exclude outline contains a lot of shapes it can take a long time to process or result in Out-of-memory errors.
     """
-
     for outline in config.get('exclude_files', []):
-        exclude_outline = gpd.read_file(outline)
-
-        for file in os.listdir(os.path.join(config["output_directory"], 'geojson_predictions')):
+        try:
+            exclude_outline = gpd.read_file(outline)
+        except Exception as e:
+            if logger:
+                logger.error(f"Failed to read exclude file '{outline}': {e}")
+            else:
+                print(f"Failed to read exclude file '{outline}': {e}")
+            continue
+        pred_dir = os.path.join(config["output_directory"], 'geojson_predictions')
+        for file in os.listdir(pred_dir):
             if not (file.endswith('.geojson') or file.endswith('.gpkg')) or not file.startswith('processed_'):
                 continue
-            file_path = os.path.join(config["output_directory"], 'geojson_predictions', file)
-            crowns = gpd.read_file(file_path)
-            exclude_outline = exclude_outline.to_crs(crowns.crs)
+            file_path = os.path.join(pred_dir, file)
+            try:
+                crowns = gpd.read_file(file_path)
+                exclude_outline_proj = exclude_outline.to_crs(crowns.crs)
 
-            # Get the bounds of the current crowns GeoDataFrame
-            file_bounds = crowns.total_bounds  # [minx, miny, maxx, maxy]
+                file_bounds = crowns.total_bounds  # [minx, miny, maxx, maxy]
+                exclude_outline_clipped = exclude_outline_proj.clip(
+                    box(file_bounds[0], file_bounds[1], file_bounds[2], file_bounds[3])
+                )
 
-            # Clip the exclude outline to the bounds of the current file to save computing time
-            exclude_outline_clipped = exclude_outline.clip(
-                box(file_bounds[0], file_bounds[1], file_bounds[2], file_bounds[3])  # Using shapely's box
-            )
-
-            # Check which geometries in 'crowns' are completely within the exclude outline
-            crowns_filtered = crowns[~crowns.geometry.within(exclude_outline_clipped.geometry.union_all())]
-
-            # Write the filtered crowns back to the original path, overwriting the original file
-            crowns_filtered.to_file(file_path, driver='GPKG')
+                crowns_filtered = crowns[~crowns.geometry.within(exclude_outline_clipped.geometry.union_all())]
+                crowns_filtered.to_file(file_path, driver='GPKG')
+            except Exception as e:
+                if logger:
+                    logger.error(f"Error processing file '{file_path}': {e}.")
+                    logger.debug(f"This is most likely due to missing or invalid geometries. Please check the file (especially if they support a containment check using within). Also check that the file is not too large to be handeled.")
+                else:
+                    print(f"Error processing file '{file_path}': {e}. This is most likely due to missing or invalid geometries. Please check the file (especially if they support a containment check using within).")
 
 def polygon_from_mask(masked_arr):
     """Convert RLE data from the output instances into Polygons.
