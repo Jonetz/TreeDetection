@@ -179,6 +179,7 @@ def tile_data(
                 print(f"Error processing file: {e}")
 
     if parallel:
+        total = len(file_list)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(process_file, data_path)
@@ -187,8 +188,10 @@ def tile_data(
 
             for i, future in enumerate(as_completed(futures)):
                 try:
-                    if logger and i % 100 == 0:
-                        logger.info(f"Tiling file {i + 1}/{len(file_list)} ({int(100 * (i + 1) / len(file_list))} % )")
+                    current_percent = int(100 * (i + 1) / total)
+                    previous_percent = int(100 * i / total)
+                    if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or previous_percent == 0):
+                        logger.info(f"Tiling file {i + 1}/{total} ({current_percent}%)")
                     future.result()  # Raises exception if one occurred
                 except Exception as e:
                     if logger:
@@ -196,9 +199,12 @@ def tile_data(
                     else:
                         print(f"Error in thread execution: {e}")
     else:
+        total = len(file_list)
         for i, data_path in enumerate(file_list):
-            if logger and i % 100 == 0:
-                logger.info(f"Tiling file {i + 1}/{len(file_list)} ({int((100 * i + 1)/len(file_list))} % )")
+            current_percent = int(100 * (i + 1) / total)
+            previous_percent = int(100 * i / total)
+            if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or previous_percent == 0):
+                logger.info(f"Tiling file {i + 1}/{total} ({current_percent}%)")
             process_file(data_path)
             
     save_recovery_data(file_list, buffer, tile_width, tile_height, logger, recovered_processed, file_list, os.path.join(out_dir, "recovery.yaml"))

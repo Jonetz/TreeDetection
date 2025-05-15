@@ -4,7 +4,7 @@ import os
 import shutil
 import traceback
 import warnings
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import cupy as cp
@@ -516,8 +516,6 @@ def element_is_near_border(polygon, bounding_box, eps):
 
 def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simplify_tolerance, logger=None):
     try:
-        if logger:
-            logger.info(f"Starting {folder}. ")
         image_folder_path = os.path.join(tiles_path, f'{folder}')
         folder = folder.replace(".json", "")
         prediction_folder_path = os.path.join(pred_fold, folder)
@@ -541,8 +539,6 @@ def process_folder_sync(folder, tiles_path, pred_fold, output_path, shift, simpl
         
         output_file = os.path.join(output_path, f"{folder.replace('.json','')}.gpkg")
         combined_gdf.to_file(output_file, driver="GPKG")
-        if logger:
-            logger.debug(f"Processed file {folder} -> {output_file}")
 
         return output_file
     except Exception as e:
@@ -565,27 +561,32 @@ def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_worke
     if logger and skipping > 0:
         logger.info(f"Skipping stiching {skipping} of {len(folders)} folders that have already been processed.") 
 
-    async def process_all_folders():
-        loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            tasks = [
-                loop.run_in_executor(
-                    executor,
-                    process_folder_sync,
-                    folder,
-                    tiles_path,
-                    pred_fold,
-                    output_path,
-                    shift,
-                    simplify_tolerance,
-                    logger,
-                )
-                for folder in folders_to_process
-            ]
-            return await asyncio.gather(*tasks)
-    
-    results = asyncio.run(process_all_folders())
-    
+    results = []    
+    # Because this is mainly I/O bound, we can use a ThreadPoolExecutor and also we force the parallelism
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                process_folder_sync,
+                folder, tiles_path, pred_fold, output_path,
+                shift, simplify_tolerance, logger
+            ): folder for folder in folders_to_process
+        }
+        
+        total = len(folders_to_process)
+        for i, future in enumerate(as_completed(futures)):
+            folder = futures[future]
+            results.append(folder)
+            try:                
+                current_percent = int(100 * (i + 1) / total)
+                previous_percent = int(100 * i / total)
+                if logger and (current_percent // 5) != (previous_percent // 5) or previous_percent == 0  or current_percent == 100:
+                    logger.info(f"Stitching file {i + 1}/{total} ({current_percent}%)")
+            except Exception as e:
+                if logger:
+                    logger.error(f"Error stitching folder '{folder}': {e}")
+                else:
+                    print(f"Error stitching folder '{folder}': {e}")
+
     # Save recovery after processing
     save_stitching_recovery(output_path, list(completed_files) + results, logger)
 

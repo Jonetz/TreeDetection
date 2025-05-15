@@ -1007,6 +1007,7 @@ def process_files_in_directory(directory, height_directory, image_directory, par
                             return os.path.join(root, file)
         return None
 
+    config = Config()
     if not parallel:
         # Sequential processing
         for filename in geojson_files:
@@ -1027,8 +1028,7 @@ def process_files_in_directory(directory, height_directory, image_directory, par
                 processed_files.add(result)
                 torch.cuda.empty_cache()
             else:
-                warnings.warn(
-                    f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
+                config.logger.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
     else:
         # Parallel processing
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1050,8 +1050,7 @@ def process_files_in_directory(directory, height_directory, image_directory, par
                     processed_file_path = os.path.join(directory, f"processed_{filename}")
                     futures.append(executor.submit(process_single_file, file_path, processed_file_path, height_file_path, image_file_path))
                 else:
-                    warnings.warn(
-                        f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
+                    config.logger.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
 
             # Ensure all futures complete
             for future in futures:

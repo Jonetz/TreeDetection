@@ -120,9 +120,12 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
             logger.error(f"Error processing {file_path}: {e}")
 
     # Launch tasks
-    for i, fp in enumerate(images_paths):        
-        if logger and i % 100 == 0:
-            logger.info(f"Predicting file {i + 1}/{len(images_paths)} ({int((100* i + 1)/len(images_paths))} % )")
+    total = len(images_paths)
+    for i, fp in enumerate(images_paths):
+        current_percent = int(100 * (i + 1) / total)
+        previous_percent = int(100 * i / total)
+        if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or previous_percent == 0):
+            logger.info(f"Predicting file {i + 1}/{total} ({current_percent}%)")
         process_image(fp)
 
     logger.info(f"Completed prediction for {len(images_paths)} images.")
@@ -162,6 +165,7 @@ def predict_tiles(config):
         end = time.time()
         predict_on_model_forrest_duration = end - start
         # Process and stitch predictions for the urban model
+        logger.info(f'Starting Stitching the urban predictions...')
         start = time.time()
         process_and_stitch_predictions(
             tiles_path=config["tiles_path"],
@@ -177,6 +181,7 @@ def predict_tiles(config):
         process_and_stitch_predictions_urban_duration = end - start
 
         # Process and stitch predictions for the forest model
+        logger.info(f'Starting Stitching the forest predictions...')
         start = time.time()
         process_and_stitch_predictions(
             tiles_path=config["tiles_path"],
@@ -417,7 +422,10 @@ def preprocess_files(config):
     missing_height_data = []
     for identifier, image_path in image_identifiers.items():
         if identifier not in height_data_identifiers:
-            warnings.warn(f"Warning: No corresponding height data found for image file {image_path}")
+            if logger:
+                logger.warning(f"No corresponding height data found for image file {image_path}")
+            else:
+                print(f"Warning: No corresponding height data found for image file {image_path}")
             missing_height_data.append(image_path)
 
     if not images_paths:
