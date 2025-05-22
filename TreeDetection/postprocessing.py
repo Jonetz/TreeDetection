@@ -91,7 +91,9 @@ def get_height_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, heig
         centers[i] = cp.array([center_x, center_y])
 
         # Compute the radius of the bounding box for the polygon
-        radius = (max_x - min_x) + (max_y - min_y) / 4
+        dx = valid_x - center_x
+        dy = valid_y - center_y
+        radius = cp.sqrt(dx ** 2 + dy ** 2).max()
         
         # Check if points are inside the polygon using a vectorized function
         inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
@@ -185,7 +187,9 @@ def get_ndvi_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, ndvi_d
 
         scaling_factor = 0.5
         # Compute the radius of the bounding box for the polygon
-        radius = ((max_x - min_x) + (max_y - min_y) / 4) * scaling_factor
+        dx = valid_x - center_x
+        dy = valid_y - center_y
+        radius = cp.sqrt(dx ** 2 + dy ** 2).max()
 
         # Check if points are inside the polygon using a vectorized function
         inside_mask = is_point_in_polygon_batch(center_x, center_y, radius, x_coords_gpu, y_coords_gpu, )
@@ -292,8 +296,10 @@ def get_metadata_within_polygon(polygon_x: np.ndarray, polygon_y: np.ndarray, nd
 
         scaling_factor = 0.5
         # Compute the radius of the bounding box for the polygon
-        radius = ((max_x - min_x) + (max_y - min_y) / 4)
-
+        dx = valid_x - center_x
+        dy = valid_y - center_y
+        radius = cp.sqrt(dx ** 2 + dy ** 2).max()
+        
         # Check if points are inside the polygon using a vectorized function
         inside_mask = is_point_in_polygon_batch(center_x, center_y, radius * scaling_factor, x_coords_gpu, y_coords_gpu, )
 
