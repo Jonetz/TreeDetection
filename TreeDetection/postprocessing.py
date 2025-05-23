@@ -763,6 +763,8 @@ def process_geojson(data, confidence_threshold, iou_threshold, area_threshold, h
 
     # 2.1 Filter out small polygons
     new_features = [feature for feature in filtered_features if id_to_area[feature['properties']['poly_id']] >= area_threshold]
+    # 2.2 Filter out large polygons
+    new_features = [feature for feature in new_features if id_to_area[feature['properties']['poly_id']] <= 1000]
     filtered_features = new_features
 
     # Precompute the set of poly_ids from filtered_features
