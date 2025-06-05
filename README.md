@@ -11,7 +11,7 @@ The primary functions to be used are in the main file, the process_files method 
 The program can be executed with either one or two models based on whats given in the config, if two models are choosen also a segmentation boundary as shape needs to be provided. 
 
 ## Additional Data 
-Additional data such as models, example images and height maps, training datasets can be found [here](https://placeholder.com/).
+Additional data such as models [(here)](https://drive.google.com/drive/folders/1kc9LbImT5-2bl0A86FfWho2q9qx7MBYd?usp=drive_link), example images and height maps (in the data folder) and training datasets can be found here in the future.
 
 ## Installation
 Typically the installation of [Detectron](detectron2.readthedocs.io/en/latest/tutorials/instal), [CUDA](https://developer.nvidia.com/cuda-12-1-0-download-archive) and [GDAL](https://gdal.org/en/stable/) runs into combatibility issues, we provide a way to install it using Conda (which is strongly adviced) and Cuda 12.1.
@@ -50,6 +50,30 @@ It is also possible to run on other versions such as CUDA 11.3 or CUDA 12.5, for
    ```bash
    pip install git+https://www.github.com/Jonetz/TreeDetection/
    ```
+
+
+### Using Docker
+The Dockerfile is provided for installation of a container. Currently a development version has to be installed, which is quite large (~ 37 GB) and can take up to half an hour to install.
+First ensure you have installed CUDA drivers compatible with CUDA 12.6 on your PC. Ypu can check this by runnning nvidia-smi in the command prompt and view the current driver version.
+In order to install the software now, you can just downlad the repository, move in the directory and build & run the container as follows:
+   ```bash
+   docker build -t tree-detection .
+   docker run --gpus all -it -v %cd%:/tree-detection tree-detection
+   ```
+After building the container you need to load the pretrained weights/models and Forest-Shapes as well as other Exclude-Shapes in the data directory:
+   ```bash
+   docker cp "< Your Models Path >" tree-detection:/app/data/
+   ```
+At the end you can test the installation with running the example script in a docker terminal:
+   ```bash
+   python example/example.py
+   ```
+### Common Problems
+- AssertionError: Input path is missing from the configuration or path is incorrect. -> Indicates, you run the example program from the wrong directory, use the toplevel directory to run the example.
+- AssertionError: < Type > model path is missing from the configuration or path is incorrect. -> Indicates, that the proper models where not imported into the right directory or the config
+- AssertionError: Forrest outline path is missing from the configuration.
+- cudaErrorInsufficientDriver: CUDA driver version is insufficient for CUDA runtime version -> Indicates that the program is unable to reach the GPU, check the driver access first on your host machine and second in your container, search for missing access or driver incompatibilities.
+- missing .h or .cpp Files -> Typically also a driver mismatch, try reloading the build essentials, the cuda toolkit or cupy 
 
 ### Requirements
 The program requires a GPU with an adequate installed CUDA version for training and inference.
