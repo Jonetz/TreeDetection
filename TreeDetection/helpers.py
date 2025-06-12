@@ -586,7 +586,7 @@ def process_and_stitch_predictions(tiles_path, pred_fold, output_path, max_worke
             try:                
                 current_percent = int(100 * (i + 1) / total)
                 previous_percent = int(100 * i / total)
-                if logger and (current_percent // 5) != (previous_percent // 5) or previous_percent == 0  or current_percent == 100:
+                if logger and (current_percent // 5) != (previous_percent // 5) or i == 0  or current_percent == 100:
                     logger.info(f"Stitching file {i + 1}/{total} ({current_percent}%)")
             except Exception as e:
                 if logger:

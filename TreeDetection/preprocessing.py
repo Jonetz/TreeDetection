@@ -203,7 +203,7 @@ def tile_data(
         for i, data_path in enumerate(file_list):
             current_percent = int(100 * (i + 1) / total)
             previous_percent = int(100 * i / total)
-            if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or previous_percent == 0):
+            if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or i == 0):
                 logger.info(f"Tiling file {i + 1}/{total} ({current_percent}%)")
             process_file(data_path)
             

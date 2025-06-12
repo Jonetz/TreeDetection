@@ -124,7 +124,7 @@ def predict_on_model(config, model_path, tiles_path, output_path, batch_size=10,
     for i, fp in enumerate(images_paths):
         current_percent = int(100 * (i + 1) / total)
         previous_percent = int(100 * i / total)
-        if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or previous_percent == 0):
+        if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or i == 0):
             logger.info(f"Predicting file {i + 1}/{total} ({current_percent}%)")
         process_image(fp)
 
@@ -311,6 +311,7 @@ def preprocess_files(config):
             height_data_identifiers["".join(match.groups())] = f
 
     if config["use_overlap"]:
+        logger.info("Using overlapping tiles for processing, do merging right now ...")
         merge_and_crop_images(config, images_paths, height_paths)
         
     # Validate height data availability
