@@ -39,7 +39,7 @@ If the command is not recognized, you can download and install Miniconda from [t
 With this command create your conda environment named tree_detection that has the right versions of python, torch, torchvisions, etc. already installed. You can again execute this in the topdirectory of the repository:
    ```bash
    conda env create -f environment.yml
-   conda activate tree_detection
+   conda activate TreeDetection
    ``` 
 If you have another version than CUDA 12.X you will most likely run into incompatibilites, in this case look at the versions in the environment file / requirements and install them manually.
 The torch compatibility charts might help to find suitable versions: [pytorch.org/get-started/previous-versions/](https://pytorch.org/get-started/previous-versions/). Here it is advantageous to already look ahead and compare the compatible versions in the next step.

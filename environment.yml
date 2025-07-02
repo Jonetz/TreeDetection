@@ -1,4 +1,4 @@
-name: testing
+name: TreeDetection
 channels:
   - pytorch
   - nvidia
