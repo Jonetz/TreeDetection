@@ -30,4 +30,4 @@ ENV PATH=/opt/conda/envs/tree_detection/bin:$PATH
 ENV CONDA_DEFAULT_ENV=tree_detection
 
 # --- [7] Show message when container is run ---
-CMD ["bash", "-c", "echo 'Container started. To run the script: docker run --gpus all -it -v %cd%:/tree-detection tree-detection, load the models and then test everything with python example/example.py; exec bash"]
+CMD ["bash", "-c", "echo Container started.; exec bash"]

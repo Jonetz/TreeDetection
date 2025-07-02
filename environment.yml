@@ -1,0 +1,17 @@
+name: testing
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - torchaudio=2.5.1
+  - pytorch-cuda=12.4
+  - setuptools<81
+  - iopath
+  - pip
+  - pip:
+      - git+https://github.com/facebookresearch/detectron2
+      - git+https://github.com/Jonetz/TreeDetection/
