@@ -10,7 +10,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from shapely.geometry import box
 from rasterio.mask import geometry_window
 import cupy as cp
+import torch
 import yaml
+
+from TreeDetection.config import Config
 
 """
 Tiling orthomosaic data.
@@ -159,19 +162,30 @@ def tile_data(
         if forest_bounds.size == 0:
             raise ValueError(f"No valid bounding boxes found in the forest shapefile {forest_shapefile}.")
         forest_bounds_gpu = cp.array(forest_bounds)
-
+        
+    config_obj = Config()
+    try:
+        device = config_obj.device
+    except:
+        if torch.cuda.is_available():
+            device = "0" 
+        else:
+            device = "cpu"
+    
+    
     def process_file(data_path):
         try:
-            tile_single_file(
-                data_path=data_path,
-                out_dir=out_dir,
-                buffer=buffer,
-                tile_width=tile_width,
-                tile_height=tile_height,
-                forest_bounds_gpu=forest_bounds_gpu,
-                forest_regions=forest_regions,
-                logger=logger,
-            )
+            with cp.cuda.Device(device):
+                tile_single_file(
+                    data_path=data_path,
+                    out_dir=out_dir,
+                    buffer=buffer,
+                    tile_width=tile_width,
+                    tile_height=tile_height,
+                    forest_bounds_gpu=forest_bounds_gpu,
+                    forest_regions=forest_regions,
+                    logger=logger,
+                )
         except Exception as e:
             if logger:
                 logger.error(f"Error processing file: {e}")

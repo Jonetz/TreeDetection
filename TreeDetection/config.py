@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import datetime
+import warnings
 
 import torch
 import yaml
@@ -39,11 +40,26 @@ def setup_model_cfg(base_model="COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x
     else:
         cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(base_model)
     
-    # Inference settings
-    cfg.MODEL.DEVICE = device  # Set device to CPU or GPU
+    
+    # Detectron2 only accepts 'cuda' or 'cpu' for MODEL.DEVICE
+    if isinstance(device, int) or (isinstance(device, str) and device.isdigit()) or (isinstance(device, str) and device.startswith("cuda:")):
+        #device = device.replace("cuda:", "")  # Remove 'cuda:' prefix if present
+        gpu_id = int(device)
+        if torch.cuda.is_available():
+            print(f"Using GPU ID: {gpu_id}")
+            torch.cuda.set_device(f'cuda:{gpu_id}')
+            cfg.MODEL.DEVICE = "cuda"
+        else:
+            warnings.warn("CUDA not available, falling back to CPU.")
+            cfg.MODEL.DEVICE = "cpu"
+    elif device == "cuda":
+        cfg.MODEL.DEVICE = "cuda"
+    else:
+        cfg.MODEL.DEVICE = "cpu"
+
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1  # Only one class (trees)
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.3  # Set threshold for predictions    
-    cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.5
+    cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.0
 
     cfg.CUDNN_BENCHMARK = True
     cfg.SOLVER.AMP.ENABLED = True
@@ -94,6 +110,38 @@ def setup_logging(log_path: str, debug: bool):
     
     return logger
 
+def set_device_configuration(config, raw_device):
+    if torch.cuda.is_available():
+        if raw_device is not None:
+            # Accept formats like "cuda:1", "1", or even "cuda"
+            if isinstance(raw_device, int):
+                device_str = raw_device
+            elif isinstance(raw_device, str) and raw_device.startswith("cuda"):
+                # Extract the device index from "cuda:X" format                
+                if raw_device.replace("cuda:", "").isdigit():
+                    device_str = raw_device.replace("cuda:", "")
+                elif raw_device == "cuda":
+                    device_str = "0"
+            elif isinstance(raw_device, str) and raw_device.isdigit():
+                device_str = raw_device
+            else:
+                device_str = "0"  # Default to first GPU if no valid device specified
+            # Validate device index
+            try:
+                gpu_index = int(device_str)
+                assert torch.cuda.device_count() > gpu_index, f"GPU index {gpu_index} is out of range."
+            except (IndexError, ValueError):
+                raise ValueError(f"Invalid CUDA device specification: {raw_device}")
+            
+            config["device"] = device_str
+        else:
+            config["device"] = "0"  # Default to first GPU
+    else:
+        if isinstance(raw_device, str) and raw_device.startswith("cuda"):
+            warnings.warn(f"CUDA device '{raw_device}' requested but CUDA is not available. Falling back to CPU.")
+            
+        config["device"] = "cpu"
+        
 def get_config(config_path: str):
     """
     Load the configuration from the specified path.
@@ -171,7 +219,9 @@ def get_config(config_path: str):
     config["height_threshold"] = config.get("height_threshold", 3)
 
     # 5. Other parameters
-    config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+    raw_device = config.get("device", None)
+    set_device_configuration(config, raw_device)
+                
     config["parallel"] = config.get("parallel", True)
     config["num_workers"] = config.get("num_workers", None)
     config["verbose"] = config.get("verbose", False)

@@ -33,7 +33,7 @@ class Predictor(DefaultPredictor):
             exclude_vars: List of variables to exclude from tiles, should be given in the metadatafile, if true, the tile will not be predicted (default: None).
         """
         super().__init__(cfg)
-        self.device = device_type
+        self.device = f'cuda:{device_type}' if device_type != "cpu" else "cpu"
         self.max_batch_size = max_batch_size
         self.output_dir = output_dir
         self.exclude_vars = exclude_vars or []  # Default to an empty list if None

@@ -865,7 +865,7 @@ def save_recovery_data_with_params(directory, params, processed_files, logger=No
         with open(recovery_file, "w") as f:
             yaml.safe_dump({
                 "parameters": params,
-                "processed_files": sorted(processed_files)
+                "processed_files": processed_files
             }, f, sort_keys=False)
         if logger:
             logger.info(f"Saved recovery file with {len(processed_files)} entries.")
@@ -873,7 +873,7 @@ def save_recovery_data_with_params(directory, params, processed_files, logger=No
         if logger:
             logger.warning(f"Failed to save recovery file: {e}")
 
-def process_single_file(file_path, processed_file_path, height_data_path, rgbi_data_path):
+def process_single_file(file_path, processed_file_path, height_data_path, rgbi_data_path, device_id=0):
     """
     Process a single GeoJSON file and save the results to a new file.
 
@@ -884,62 +884,63 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         containment_threshold (float): Threshold for polygon containment.
         height_data_path (str): Path to the raster file containing height data.
     """
-    try:
-        config = Config()
+    with cp.cuda.Device(device_id):
+        try:
+            config = Config()
 
-        with fiona.open(file_path, 'r') as source:
-            features = [to_dict(feature) for feature in source]
-            schema = source.schema
-            crs = source.crs.to_string()
+            with fiona.open(file_path, 'r') as source:
+                features = [to_dict(feature) for feature in source]
+                schema = source.schema
+                crs = source.crs.to_string()
 
-        data = {
-            "type": "FeatureCollection",
-            "features": features
-        }
-        config.logger.info(f"Processing file {file_path} with {len(data['features'])} features.")
-        processed_data = process_geojson(data, config.confidence_threshold, config.iou_threshold, config.area_threshold, height_data_path, rgbi_data_path)
+            data = {
+                "type": "FeatureCollection",
+                "features": features
+            }
+            config.logger.info(f"Processing file {file_path} with {len(data['features'])} features.")
+            processed_data = process_geojson(data, config.confidence_threshold, config.iou_threshold, config.area_threshold, height_data_path, rgbi_data_path)
 
-        new_schema = schema.copy()
-        new_properties_schema = {
-            'Confidence_score': 'float',
-            'poly_id': 'str',
-            'Area': 'float',
-            'TreeHeight': 'float',
-            'Centroid': 'str',
-            'Diameter': 'float',
-            'is_contained': 'str',
-            'num_contained': 'int',
-            #'ContainedCount': 'int',
-            #'MeanNDVI': 'float',
-            #'MaxNDVI': 'float',
-            #'MinNDVI': 'float',
-            #'VarNDVI': 'float'
-        }
-        new_schema['properties'] = new_properties_schema
+            new_schema = schema.copy()
+            new_properties_schema = {
+                'Confidence_score': 'float',
+                'poly_id': 'str',
+                'Area': 'float',
+                'TreeHeight': 'float',
+                'Centroid': 'str',
+                'Diameter': 'float',
+                'is_contained': 'str',
+                'num_contained': 'int',
+                #'ContainedCount': 'int',
+                #'MeanNDVI': 'float',
+                #'MaxNDVI': 'float',
+                #'MinNDVI': 'float',
+                #'VarNDVI': 'float'
+            }
+            new_schema['properties'] = new_properties_schema
 
-        # Filter features based on the provided conditions
-        filtered_features = []
-        for feature in processed_data["features"]:
-            # Convert 'Centroid' to a JSON string if it exists
-            if 'Centroid' in feature['properties']:
-                feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
+            # Filter features based on the provided conditions
+            filtered_features = []
+            for feature in processed_data["features"]:
+                # Convert 'Centroid' to a JSON string if it exists
+                if 'Centroid' in feature['properties']:
+                    feature['properties']['Centroid'] = json.dumps(feature['properties']['Centroid'])
 
-            # Convert all NumPy types to native Python types
-            feature['properties'] = convert_to_python_types(feature['properties'])
+                # Convert all NumPy types to native Python types
+                feature['properties'] = convert_to_python_types(feature['properties'])
 
-            # Ensure properties are ordered correctly
-            feature = order_properties(feature, new_properties_schema)
+                # Ensure properties are ordered correctly
+                feature = order_properties(feature, new_properties_schema)
 
-            filtered_features.append(feature)
+                filtered_features.append(feature)
 
-        # Write the filtered features to the new GeoJSON file
-        with fiona.open(processed_file_path, 'w', driver='GPKG', schema=new_schema, crs=crs) as dest:
-            for feature in filtered_features:
-                dest.write(feature)
-        return file_path
-    except Exception as e:
-        print(f"Error postprocessing file {file_path}: {e}")
-        return None
+            # Write the filtered features to the new GeoJSON file
+            with fiona.open(processed_file_path, 'w', driver='GPKG', schema=new_schema, crs=crs) as dest:
+                for feature in filtered_features:
+                    dest.write(feature)
+            return file_path
+        except Exception as e:
+            print(f"Error postprocessing file {file_path}: {e}")
+            return None
 
 def process_files_in_directory(directory, height_directory, image_directory, parallel=True, filename_pattern=None):
     """
@@ -1016,6 +1017,14 @@ def process_files_in_directory(directory, height_directory, image_directory, par
         return None
 
     config = Config()
+    try:
+        device = config_obj.device
+    except:
+        if torch.cuda.is_available():
+            device = "cuda:0" 
+        else:
+            device = "cpu"
+    
     if not parallel:
         # Sequential processing
         for filename in geojson_files:
@@ -1032,15 +1041,14 @@ def process_files_in_directory(directory, height_directory, image_directory, par
 
             if height_file_path and image_file_path:
                 processed_file_path = os.path.join(directory, f"processed_{filename}")
-                result = process_single_file(file_path, processed_file_path, height_file_path, image_file_path)                
+                result = process_single_file(file_path, processed_file_path, height_file_path, image_file_path, device_id=device)                
                 processed_files.add(result)
                 torch.cuda.empty_cache()
             else:
                 config.logger.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
     else:
         # Parallel processing
-        with ThreadPoolExecutor(max_workers=2) as executor:
-
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
             for filename in geojson_files:
                 file_path = os.path.join(directory, filename)
@@ -1056,7 +1064,7 @@ def process_files_in_directory(directory, height_directory, image_directory, par
 
                 if height_file_path and image_file_path:
                     processed_file_path = os.path.join(directory, f"processed_{filename}")
-                    futures.append(executor.submit(process_single_file, file_path, processed_file_path, height_file_path, image_file_path))
+                    futures.append(executor.submit(process_single_file, file_path, processed_file_path, height_file_path, image_file_path, device_id=device))
                 else:
                     config.logger.warn(f"Height data file not found for: {filename}, searched pattern for base name: {base_name}")
 
