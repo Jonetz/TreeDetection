@@ -5,7 +5,7 @@ if __name__ == "__main__":
     """
     With this script you can run the tree detection process on the provided example image of a 1 x 1 km square of Germany.
     """
-    config, _ = get_config("config.yml")
+    config, _ = get_config("example/config.yml")
     
     """
     For illustration purposes, we print the configuration, most of the configuration is set to default values, but can also be seen in the config files.

@@ -1,13 +1,13 @@
 # File handling
 image_directory: "data/rgb"       # Location of all GeoTIFs-Files that we want to infer
 height_data_path: "data/nDSM"     # Corresponding nDSM data to the TIF files
-image_regex: "FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"       # Image Regex to extract a identifier from the file name, examples: "FDOP20_(\d+)_rgbi\.tif","FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"
-height_data_regex: "nDSM_(\\d+)_1km\\.tif" # Corresponding height regex to associate the nDSM data
+image_regex: "(\\d+)\\.tif"       # Image Regex to extract a identifier from the file name, examples: "FDOP20_(\d+)_rgbi\.tif","FDOP20_(\\d+)_(\\d+)_rgbi\\.tif"
+height_data_regex: "(\\d+)\\.tif" # Corresponding height regex to associate the nDSM data
 
-#combined_model: "data/model_combined.pth"              # I) make combined prediction or specify the urban_model and forrest_model separately
-urban_model: "data/model_combined.pth"                  # II) specify the urban model
-forrest_model: "data/model_forrest.pth"                 # II) specify the forrest model
-forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # II) specify the forrest outline
+combined_model: "data/model_combined.pth"              # I) make combined prediction or specify the urban_model and forrest_model separately
+#urban_model: "data/model_combined.pth"                  # II) specify the urban model
+#forrest_model: "data/model_forrest.pth"                 # II) specify the forrest model
+#forrest_outline: "data/BW-Waldflächen/Waldflächen.shp"  # II) specify the forrest outline
 
 output_directory: "output"        # Output folder, default: ./output
 tiles_path: "tiles"               # Intermediate folder for tiling, default: ./tiles
@@ -29,8 +29,8 @@ buffer: 20        # default: 20
 batch_size: 10    # Predictions Batch size, typically rule of thumb 1 per GB on GPU, monitor GPU usgae in prediction in order to optimize this value
 
 # Post-processing files
-exclude_files:  # list of area-files that contain no trees at all, e.g. buildings, seas, rivers etc.
-  - "data/BW-Gewaesser/Gewaesserflaechen.shp"
+#exclude_files:  # list of area-files that contain no trees at all, e.g. buildings, seas, rivers etc.
+#  - "data/BW-Gewaesser/Gewaesserflaechen.shp"
 
 # Scaling for possible efficiency tradeoffs
 ndvi_scaling_factor: 0.2   # default: 0.2, resolution dependent parameter for NDVI calculation

@@ -11,74 +11,10 @@ The primary functions to be used are in the main file, the process_files method 
 The program can be executed with either one or two models based on whats given in the config, if two models are choosen also a segmentation boundary as shape needs to be provided. 
 
 ## Additional Data 
-Additional data such as models, example images and height maps, training datasets can be found [here](https://placeholder.com/).
+Additional data such as models [(here)](https://drive.google.com/drive/folders/1kc9LbImT5-2bl0A86FfWho2q9qx7MBYd?usp=drive_link), example images and height maps (in the data folder) and training datasets can be found here in the future.
 
 ## Installation
-Typically the installation of [Detectron](detectron2.readthedocs.io/en/latest/tutorials/instal), [CUDA](https://developer.nvidia.com/cuda-12-1-0-download-archive) and [GDAL](https://gdal.org/en/stable/) runs into combatibility issues, we provide a way to install it using Conda (which is strongly adviced) and Cuda 12.1.
-It is also possible to run on other versions such as CUDA 11.3 or CUDA 12.5, for this besides the versions here, the exact cupy version in the setup.py has to be adapted.
-
-
-### Using Conda
-
-1. Clean the cache:
-   ```bash
-   pip cache purge
-   ```
-
-2. Create a new Environment:
-   ```bash
-   conda create -n tree_detection python=3.9
-   ```
-
-3. Install the Nvidia Cuda Toolkit for GPU support, we suggest using cuda12x:
-   ```bash
-   conda install nvidia/label/cuda-12.1.0::cuda-toolkit -c nvidia/label/cuda-12.1.0
-   ```
-
-4. Install PyTorch via an alternative channel:
-   ```bash
-   pip install setuptools wheel
-   conda install pytorch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 pytorch-cuda=12.4 -c pytorch -c nvidia
-   ```
-
-5. Install Detectron via Conda:
-   ```bash
-   conda install -c conda-forge detectron2
-   ```
-
-6. Install the package:
-   ```bash
-   pip install git+https://www.github.com/Jonetz/TreeDetection/
-   ```
-
-### Requirements
-The program requires a GPU with an adequate installed CUDA version for training and inference.
-Further, the following libraries are used:
-
-```python
-affine
-aiofiles
-cupy_cuda113 / cupy-cuda12x / ... (depending on your cuda version)
-detectron2
-fiona
-geopandas
-matplotlib
-numba
-numpy
-opencv_python
-pandas
-pycocotools
-PyYAML
-rasterio
-scikit_learn
-scipy
-Shapely
-skimage
-torch
-```
-Typically, `rasterio` and `geopandas` require some form of [GDAL](https://gdal.org/en/stable/), which comes in many versions and often conflicts with `torch` or `detectron`, so watch out for this during installation. 
-Additionally, `detectree` in version 1.0.8 is needed for training. This can be downloaded [here](https://github.com/PatBall1/detectree2/releases), for this it is advised to use CUDA 11.3.
-
+Please see [our installation guide](installations.md) for installation instructions, either as docker-image or via conda.
 
 ## Training and Inference 
 
