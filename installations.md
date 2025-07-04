@@ -3,6 +3,12 @@ Typically the installation of [Detectron](detectron2.readthedocs.io/en/latest/tu
 
 ## 1. Using Conda
 
+### Download the Repository
+In order to install the Package & run the sample script, it is best to download the repository and work within the repository:
+   ```bash
+   git clone https://github.com/Jonetz/TreeDetection
+   cd Tree Detection
+   ```
 
 ### Ensuring GPU-Drivers are installed
 First ensure you have installed CUDA drivers compatible with CUDA 12.6 on your PC. You can test this by running
@@ -14,7 +20,23 @@ Then test the current Nvidia Cuda Compiler version by checking nvcc
    ```bash
    nvcc --version
    ```
-this should also return a compatible CUDA Version.  
+this should also return a compatible CUDA Version.  If this does not return any versions you can install the compilers via:
+   ```bash
+   sudo apt-get install cuda-toolkit
+   ```
+Afterwards try the nvcc-version again. 
+
+Install Build-Essentials, to build the Detectron application:
+   ```bash
+   sudo apt-get install build-essential
+   ```
+Try to verify that gcc & g++ work by trying:
+   ```bash
+   gcc --version
+   ```
+If no version is shown try to install gcc & g++ via apt.
+
+
 It is important to note the CUDA Version here if it starts with 12.X you do not have to worry otherwise you should either consider updating/downgrading your version if possible, or you need to adapt the versions in the next steps suitably. 
 
 If you do not already have the right drivers installed please refer to the installation guides:
@@ -98,11 +120,13 @@ Which should result in something like this, the exact versions may differ:
    Build cuda_12.0.r12.0/compiler.32267302_0
    ```
 If there are some problems or the CUDA Version is not compatible with the given package options, try manually installing the missing packages:
+
 1.) Install Detectron2 
 - Facebooks [Detectron2 libary](https://github.com/facebookresearch/detectron2) needs to be compiled specifically for your CUDA version, so it must be installed separately, under windows this requires several additional libaries, so linux is recommended:
    ```bash
    pip install 'git+https://github.com/facebookresearch/detectron2.git'
    ``` 
+   If this returns a error you can try installation via conda using the conda-forge channel  `conda install -c conda-forge detectron2`, ensure version 0.6 was installed.
 - Again if you have a different CUDA or Torch versions please refer to the [official installation guide](https://detectron2.readthedocs.io/en/latest/tutorials/install.html) to find the correct version. 
 - You can check if the installation was successful using this command, which should return a version number:
    ```bash
@@ -132,7 +156,7 @@ First ensure you have installed CUDA drivers compatible with CUDA 12.6 on your P
 to receive an overview of your drivers version, the current CUDA Version and your GPUs together with current resources allocations.
 Then test the current Nvidia Cuda Compiler version by checking nvcc 
    ```bash
-   nvcc
+   nvcc --version
    ```
 this should also return a compatible CUDA Version. 
 
