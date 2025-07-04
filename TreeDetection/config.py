@@ -46,7 +46,6 @@ def setup_model_cfg(base_model="COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x
         #device = device.replace("cuda:", "")  # Remove 'cuda:' prefix if present
         gpu_id = int(device)
         if torch.cuda.is_available():
-            print(f"Using GPU ID: {gpu_id}")
             torch.cuda.set_device(f'cuda:{gpu_id}')
             cfg.MODEL.DEVICE = "cuda"
         else:
