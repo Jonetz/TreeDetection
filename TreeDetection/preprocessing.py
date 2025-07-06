@@ -176,13 +176,16 @@ def tile_data(
     def process_file(data_path):
         try:
             with cp.cuda.Device(device):
+                
+                forest_bounds_local = cp.asarray(forest_bounds_gpu) 
+
                 tile_single_file(
                     data_path=data_path,
                     out_dir=out_dir,
                     buffer=buffer,
                     tile_width=tile_width,
                     tile_height=tile_height,
-                    forest_bounds_gpu=forest_bounds_gpu,
+                    forest_bounds_gpu=forest_bounds_local,
                     forest_regions=forest_regions,
                     logger=logger,
                 )
@@ -204,7 +207,7 @@ def tile_data(
                 try:
                     current_percent = int(100 * (i + 1) / total)
                     previous_percent = int(100 * i / total)
-                    if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or previous_percent == 0):
+                    if logger and ((current_percent // 5) != (previous_percent // 5) or current_percent == 100 or i == 0):
                         logger.info(f"Tiling file {i + 1}/{total} ({current_percent}%)")
                     future.result()  # Raises exception if one occurred
                 except Exception as e:
