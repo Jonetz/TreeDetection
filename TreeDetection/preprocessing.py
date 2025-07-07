@@ -1,7 +1,5 @@
-import asyncio
 import json
 import os
-import aiofiles
 import geopandas as gpd
 import numpy as np
 import rasterio
@@ -176,8 +174,8 @@ def tile_data(
     def process_file(data_path):
         try:
             with cp.cuda.Device(device):
-                
-                forest_bounds_local = cp.asarray(forest_bounds_gpu) 
+                if forest_bounds_gpu is not None:
+                    forest_bounds_local = cp.asarray(forest_bounds_gpu) 
 
                 tile_single_file(
                     data_path=data_path,
