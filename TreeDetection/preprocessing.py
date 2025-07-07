@@ -176,6 +176,8 @@ def tile_data(
             with cp.cuda.Device(device):
                 if forest_bounds_gpu is not None:
                     forest_bounds_local = cp.asarray(forest_bounds_gpu) 
+                else:
+                    forest_bounds_local = None
 
                 tile_single_file(
                     data_path=data_path,
