@@ -7,60 +7,113 @@ import rtree
 import torch
 import json
 import math
-
-import cupy as cp
 import numpy as np
 
-from TreeDetection.config import Config
-from TreeDetection.postprocessing import process_containment_features
-
+from SolarDetection.config import Config
 from SolarDetection.buildings import ShapeCache, find_roof_solar, partition_geometries
 from SolarDetection.utilities import compute_rectangularity, gradient_to_azimuth, iou, order_properties, convert_to_python_types
+from SolarDetection.containment_processing import filter_containment
 
 import fiona
-from fiona.model import to_dict#
+from fiona.model import to_dict
 
 import rasterio
 from rasterio.windows import Window
 from rasterio.transform import rowcol
 
-from shapely.geometry import shape
+from shapely.ops import unary_union
+from shapely.geometry import shape, mapping
+from shapely import MultiPolygon, Polygon
 
-def filter_duplicates(features, iou_threshold=0.5):
-    """Filter out duplicate polygons based on IoU threshold."""
-    # Sort features by confidence score (descending)
-    features = sorted(features, key=lambda f: float(f['properties']['Confidence_score']), reverse=True)
+def filter_duplicates(features, iou_threshold=0.5, merge_threshold=0.9):
+    """Filter and optionally merge duplicate polygons based on IoU and confidence."""
 
-    # Create an R-tree index
+    def get_rectangularity(feature):
+        return float(feature['properties'].get('Rectangularity', 0))
+
+    def get_confidence(feature):
+        return float(feature['properties'].get('Confidence_score', 0))
+
+    # Step 1: Sort features
+    rect_ge_075 = [f for f in features if get_rectangularity(f) >= 0.75]
+    rect_lt_075 = [f for f in features if get_rectangularity(f) < 0.75]
+
+    rect_ge_075_sorted = sorted(rect_ge_075, key=get_rectangularity)
+    rect_lt_075_sorted = sorted(rect_lt_075, key=get_confidence, reverse=True)
+
+    sorted_features = rect_ge_075_sorted + rect_lt_075_sorted
+
+    # Step 2: Build spatial index
     idx = rtree.index.Index()
     polygons = []
-    
-    for i, feature in enumerate(features):
+
+    for i, feature in enumerate(sorted_features):
         polygon = shape(feature['geometry'])
         polygons.append((feature, polygon))
         idx.insert(i, polygon.bounds)
-    
-    # Keep track of removed features
+
     to_remove = set()
+    merged_features = {}
 
     for i, (feature1, poly1) in enumerate(polygons):
         if i in to_remove:
             continue
 
-        # Find possible intersections using R-tree
         for j in idx.intersection(poly1.bounds):
             if i == j or j in to_remove:
                 continue
-            
+
             feature2, poly2 = polygons[j]
+
             try:
                 if iou(poly1, poly2) > iou_threshold:
-                    to_remove.add(j)  # Remove lower-ranked feature
+                    conf1 = get_confidence(feature1)
+                    conf2 = get_confidence(feature2)
+
+                    if conf1 > merge_threshold and conf2 > merge_threshold:
+                        # Merge geometries
+                        merged_geom = unary_union([poly1, poly2])
+
+                        # Ensure result is a Polygon (take largest part if MultiPolygon)
+                        if merged_geom.geom_type == 'MultiPolygon':
+                            merged_geom = max(merged_geom.geoms, key=lambda g: g.area)
+                        elif merged_geom.geom_type != 'Polygon':
+                            warnings.warn(f"Merged geometry is of unexpected type: {merged_geom.geom_type}")
+
+                        # Merge properties (average values; more can be added as needed)
+                        merged_props = {
+                            'Confidence_score': (conf1 + conf2) / 2,
+                            'Rectangularity': (get_rectangularity(feature1) + get_rectangularity(feature2)) / 2,
+                            'Merged': True
+                        }
+
+                        # Copy all other properties from feature1 (optionally: merge further)
+                        for k, v in feature1['properties'].items():
+                            if k not in merged_props:
+                                merged_props[k] = v
+
+                        # Replace feature1 with merged one
+                        merged_feature = {
+                            'type': 'Feature',
+                            'geometry': mapping(merged_geom),
+                            'properties': merged_props
+                        }
+
+                        polygons[i] = (merged_feature, merged_geom)
+                        merged_features[i] = merged_feature
+                        to_remove.add(j)
+
+                    else:
+                        # Remove the lower-ranked one (j comes later in sort order)
+                        to_remove.add(j)
+                
+
             except Exception as e:
                 warnings.warn(f"Error calculating IoU for features {i} and {j}: {e}")
                 continue
 
-    return [feature for i, (feature, _) in enumerate(polygons) if i not in to_remove]
+    # Step 3: Return kept and merged features
+    return [merged_features.get(i, feature) for i, (feature, _) in enumerate(polygons) if i not in to_remove]
 
 def get_height_and_slope_at_centroids(height_path, centroids, buffer_m=1.0):
     with rasterio.open(height_path) as src:
@@ -113,66 +166,7 @@ def get_height_and_slope_at_centroids(height_path, centroids, buffer_m=1.0):
             except Exception:
                 results.append((None, None, None, None))
         return results
-"""
-def get_height_and_slope_at_centroids_plane_fit(height_path, centroids, buffer_m=1.0):
-    with rasterio.open(height_path) as src:
-        band = src.read(1, masked=True)
-        transform = src.transform
-        res_x = transform.a
-        res_y = abs(transform.e)
-        px_buffer = int(np.ceil(buffer_m / max(res_x, res_y)))
 
-        results = []
-
-        for x, y in centroids:
-            try:
-                row, col = rowcol(transform, x, y)
-                row_start = max(0, row - px_buffer)
-                row_stop = min(src.height, row + px_buffer + 1)
-                col_start = max(0, col - px_buffer)
-                col_stop = min(src.width, col + px_buffer + 1)
-
-                window = Window(col_start, row_start, col_stop - col_start, row_stop - row_start)
-                window_data = src.read(1, window=window, masked=True)
-
-                if window_data.mask.all():
-                    results.append((None, None, None, None, None))
-                    continue
-
-                # Get corresponding X, Y positions
-                rows, cols = np.meshgrid(
-                    np.arange(row_start, row_stop),
-                    np.arange(col_start, col_stop),
-                    indexing='ij'
-                )
-                xs, ys = rasterio.transform.xy(transform, rows, cols)
-                xs = np.array(xs).flatten()
-                ys = np.array(ys).flatten()
-                zs = window_data.filled(np.nan).flatten()
-
-                valid = ~np.isnan(zs)
-                if valid.sum() < 3:
-                    results.append((None, None, None, None, None))
-                    continue
-
-                # Fit plane: z = ax + by + c
-                A = np.c_[xs[valid], ys[valid], np.ones(valid.sum())]
-                coeffs, _, _, _ = np.linalg.lstsq(A, zs[valid], rcond=None)
-                a, b, _ = coeffs  # dz/dx, dz/dy
-
-                slope_rad = np.arctan(np.sqrt(a**2 + b**2))
-                slope_deg = np.degrees(slope_rad)
-
-                mean_height = float(np.nanmean(zs[valid]))
-                height_variance = float(np.nanvar(zs[valid]))
-
-                results.append((mean_height, slope_deg, float(a), float(b), height_variance))
-
-            except Exception:
-                results.append((None, None, None, None, None))
-
-        return results
-"""
 def get_avg_rgb_at_centroids(rgb_path, centroids, buffer_m=1.0):
     results = []
     with rasterio.open(rgb_path) as src:
@@ -220,10 +214,14 @@ def filter_height_slope(height_data_path, rgbi_data_path, filtered_features):
         # Get slope orientation based on gradient
         if dx is not None and dy is not None:
             tilt_azimuth = (gradient_to_azimuth(dx, dy) + 360) % 360  # We want to have the direction towards the sun.
-            feature['properties']['Orientation_deg'] = round(tilt_azimuth, 1)
-            directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-            idx = int(((tilt_azimuth) % 360) // 45)
-            feature['properties']['Orientation_label'] = directions[idx]
+            if not math.isnan(tilt_azimuth):
+                feature['properties']['Orientation_deg'] = round(tilt_azimuth, 1)
+                directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+                idx = int(((tilt_azimuth) % 360) // 45)
+                feature['properties']['Orientation_label'] = directions[idx]
+            else:
+                feature['properties']['Orientation_deg'] = None
+                feature['properties']['Orientation_label'] = None
         else:
             feature['properties']['Orientation_deg'] = None
             feature['properties']['Orientation_label'] = None
@@ -238,70 +236,7 @@ def filter_height_slope(height_data_path, rgbi_data_path, filtered_features):
             feature['properties']['True_Area'] = true_area
     return feature_data
 
-def visualize_features_with_matplotlib(filtered_features, rgbi_data_path: str):
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import rasterio
-    from shapely.geometry import shape
-    from matplotlib.patches import Polygon as MplPolygon
-    from matplotlib.patches import FancyArrow
-
-    with rasterio.open(rgbi_data_path) as src:
-        rgb_image = src.read([1, 2, 3])
-        transform = src.transform
-
-    # Move to HWC for plotting
-    img = np.moveaxis(rgb_image, 0, -1)
-
-    for feature in filtered_features:
-        polygon = shape(feature['geometry'])
-        coords = np.array(polygon.exterior.coords)
-
-        # Transform polygon world coords to image pixel coords
-        pixel_coords = np.array([~transform * (x, y) for x, y in coords])
-        pixel_coords = np.array(pixel_coords)
-
-        # Get tight bounds for plotting
-        min_x, min_y = np.floor(pixel_coords.min(axis=0)).astype(int)
-        max_x, max_y = np.ceil(pixel_coords.max(axis=0)).astype(int)
-
-        # Clip to image bounds
-        height, width = img.shape[:2]
-        min_x = max(min_x - 20, 0)
-        min_y = max(min_y - 20, 0)
-        max_x = min(max_x + 20, width)
-        max_y = min(max_y + 20, height)
-
-        sub_img = img[min_y:max_y, min_x:max_x]
-
-        fig, ax = plt.subplots()
-        ax.imshow(sub_img)
-
-        # Offset pixel coords to sub-image
-        offset_coords = pixel_coords - np.array([min_x, min_y])
-        patch = MplPolygon(offset_coords, closed=True, edgecolor='lime', facecolor='none', linewidth=2)
-        ax.add_patch(patch)
-
-        # Centroid
-        centroid = polygon.centroid
-        cx, cy = ~transform * (centroid.x, centroid.y)
-        cx -= min_x
-        cy -= min_y
-        ax.plot(cx, cy, 'bo', markersize=5, label='Centroid')
-
-        # Principal direction arrow
-        azimuth = feature['properties'].get('Orientation_deg', None)
-        if azimuth is not None:
-            angle_rad = np.radians(azimuth)
-            dx, dy = 30 * np.sin(angle_rad), -30 * np.cos(angle_rad)  # minus because y is down in image space
-            ax.add_patch(FancyArrow(cx, cy, dx, dy, width=2, color='red'))
-
-        ax.set_title(f"Feature ID: {feature['properties'].get('id', 'n/a')}, Orientation: {azimuth:.1f}°" if azimuth is not None else "No orientation")
-        ax.axis('off')
-        plt.tight_layout()
-        plt.show()
-
-def process_geojson(data: Dict, confidence_threshold: float, area_threshold: float, height_data_path: str, rgbi_data_path: str) -> Dict:
+def process_geojson(data: Dict, height_data_path: str, rgbi_data_path: str) -> Dict:
     """
     Process a GeoJSON file and return the processed data.
     
@@ -316,51 +251,85 @@ def process_geojson(data: Dict, confidence_threshold: float, area_threshold: flo
         Dict: Processed GeoJSON data
     """
     config = Config()    
-    features = data['features']
-    
+
+    features = data.get('features', [])
+    for i, feature in enumerate(features):
+        geom = shape(feature['geometry'])  # Convert GeoJSON dict → Shapely geometry
+        try:
+            if not geom.is_valid:
+                geom = geom.buffer(0)
+            if isinstance(geom, MultiPolygon):
+                largest_poly = max(geom.geoms, key=lambda p: p.area)
+                geom = largest_poly
+            if not isinstance(geom, Polygon):
+                continue        
+            if not geom.is_valid:
+                continue
+        except Exception as e:
+            print(f"Failed to fix geometry: {e}")
+            continue
+
+        feature['properties']['poly_id'] = feature['properties'].get('poly_id', i)
+        feature['geometry'] = mapping(geom)  # Convert back → GeoJSON dict
+
     if len(features) == 0:
-        print("No features to process.")
         return data
     
     # 1. Filter using confidence threshold and area_threshold threshold
     for feature in features:
         feature['properties']['Area'] = shape(feature['geometry']).area
-
-    filtered_features = [
-        feature for feature in features
-        if feature['properties'].get('Confidence_score') is not None and
-           float(feature['properties'].get('Confidence_score', 0)) >= confidence_threshold
-    ]
-    filtered_features = [
-        feature for feature in filtered_features
-        if feature['properties']['Area'] >= area_threshold
-    ]   
-
-    # 2. Calculate the centroid of the polygon    
+    if hasattr(config, 'confidence_threshold'):
+        filtered_features = [
+            feature for feature in features
+            if feature['properties'].get('Confidence_score') is not None and
+            float(feature['properties'].get('Confidence_score', 0)) >= config.confidence_threshold
+        ]
+    if hasattr(config, 'area_threshold'):
+        filtered_features = [
+            feature for feature in filtered_features
+            if feature['properties']['Area'] >= config.area_threshold
+        ]   
+    # 2. Calculate the centroid & rectangularity of the polygon    
+    new_features = []
     for feature in filtered_features:
         polygon = shape(feature['geometry'])
+        if polygon.is_empty:
+            continue
         centroid = polygon.centroid
+        rectangularity = compute_rectangularity(polygon)
+        complexity = 1- (polygon.area/polygon.convex_hull.area) if polygon.area > 0 or (polygon.area != polygon.convex_hull.area) else 0        
+        if complexity >= 0.3:
+            continue
         feature['properties']['Centroid'] = (centroid.x, centroid.y)
+        feature['properties']['Rectangularity'] = round(rectangularity, 3)
+        feature['properties']['Shape_complexity'] =complexity
+        new_features.append(feature)
+    filtered_features = new_features
     
+    if len(filtered_features) == 0:
+        return data
     minx = min([shape(feature['geometry']).bounds[0] for feature in filtered_features])
     miny = min([shape(feature['geometry']).bounds[1] for feature in filtered_features])
     maxx = max([shape(feature['geometry']).bounds[2] for feature in filtered_features])
     maxy = max([shape(feature['geometry']).bounds[3] for feature in filtered_features])
     bbox = (minx, miny, maxx, maxy)
-    
-    # 3. Advanced filtering of features
-    # Filter out duplicates based on IoU
-    filtered_features = filter_duplicates(filtered_features, iou_threshold=0.5)
 
-    # Filter out features based on Containment
-    all_ids = []
-    all_bounds = []
-    for i, feature in enumerate(filtered_features):
-        feature['properties']['poly_id'] = str(i)
-        all_ids.append(str(i))
-        all_bounds.append(shape(feature['geometry']).bounds)
-    all_bounds = cp.array(all_bounds, dtype=cp.float32)    
-    filtered_features = process_containment_features(filtered_features, all_ids, all_bounds, config.containment_threshold)
+    # 3. Advanced filtering of features
+    # Filter out duplicates based on IoU & Rectangularity
+    filtered_features = filter_duplicates(filtered_features, iou_threshold=0.6)
+
+    new_features = []
+    for feature in filtered_features:
+        if 'merged' in feature['properties'] and feature['properties']['merged'] is True:
+            # Make Centroid rectangularity and shape complexity and area again
+            polygon = shape(feature['geometry'])
+            centroid = polygon.centroid
+            feature['properties']['Centroid'] = (centroid.x, centroid.y)
+            feature['properties']['Rectangularity'] = round(compute_rectangularity(polygon), 3)
+            feature['properties']['Shape_complexity'] = 1 - (polygon.area / polygon.convex_hull.area) if polygon.area > 0 or (polygon.area != polygon.convex_hull.area) else 0
+            feature['properties']['Area'] = polygon.area      
+        new_features.append(feature)
+    filtered_features = new_features
 
     # 4. Check if the centroid is in a building shape if possible
     if config.building_shapes is not None:
@@ -369,37 +338,34 @@ def process_geojson(data: Dict, confidence_threshold: float, area_threshold: flo
         for feature in filtered_features:
             feature['properties']['In_building'] = None
 
-    # Filter out features based on Rectangularity ?  
+    # Filter out features based on Rectangularity  
     for feature in filtered_features:
         polygon = shape(feature['geometry'])
-        rectangularity = compute_rectangularity(polygon)
-        feature['properties']['Rectangularity'] = round(rectangularity, 3)
         if feature['properties']['In_building'] is None or feature['properties']['In_building'] == 1:
             continue
         if feature['properties']['Area'] > 500:
             # If the area is large we assume its a whole field of solar panels
             continue
-        if rectangularity < config.rectangularity_threshold:
+        if feature['properties']['Rectangularity'] < config.rectangularity_threshold:
             filtered_features.remove(feature)
             continue
 
     # 5. Filter out features based on height and slope (if possible)
-    filtered_features = filter_height_slope(height_data_path, rgbi_data_path, filtered_features) #TODO: Add height and slope thresholds
-    
-    for feature in filtered_features:
-        if feature['properties']['Height'] and feature['properties']['Height'] < config.height_threshold:
-            filtered_features.remove(feature)
-            continue
-        if feature['properties']['num_contained'] > 2:
-            filtered_features.remove(feature)
-            continue
+    if not height_data_path or not rgbi_data_path:
+        print("Height data or RGBI data path not provided, skipping height and slope filtering.")
+    else:
+        filtered_features = filter_height_slope(height_data_path, rgbi_data_path, filtered_features) #TODO: Add height and slope thresholds
+        if hasattr(config, 'height_threshold'):
+            filtered_features = [feature for feature in filtered_features if feature['properties']['Height'] > config.height_threshold]
+        if hasattr(config, 'outside_area_threshold'):
+            filtered_features = [feature for feature in filtered_features if not feature['properties']['In_Building'] \
+                                and feature['properties']['True_Area'] is not None and feature['properties']['True_Area'] > config.outside_area_threshold]
 
-    # Return the processed data, for this return the filtered features
-    #visualize_features_with_matplotlib(filtered_features, rgbi_data_path)
-
-    updated_features = []
+    # Filter out features based on Containment
+    filtered_features = filter_containment(filtered_features, config.containment_threshold)
 
     # We need to save the indices of selected features, to get the right ndvi indices / heights later
+    updated_features = []
     for feature in filtered_features:
          # Create a new properties dictionary to avoid direct mutation
         centroid = feature['properties']['Centroid']
@@ -419,7 +385,9 @@ def process_geojson(data: Dict, confidence_threshold: float, area_threshold: flo
             'Rectangularity': feature['properties'].get('Rectangularity', None),
             'containment_ratio': feature['properties'].get('containment_ratio', None),
             'num_contained': feature['properties'].get('num_contained', 0),
-            'is_contained': feature['properties'].get('is_contained', False)
+            'is_contained': feature['properties'].get('is_contained', False),
+            'Shape_complexity': feature['properties'].get('Shape_complexity', 0),
+            'Containment_coverage': feature['properties'].get('containment_coverage', 0.0)     
         })
         new_feature = {
             'type': 'Feature',
@@ -446,7 +414,6 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         height_data_path (str): Path to the raster file containing height data.
     """
     config = Config()
-
     with fiona.open(file_path, 'r') as source:
         features = [to_dict(feature) for feature in source]
         schema = source.schema
@@ -456,7 +423,7 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         "type": "FeatureCollection",
         "features": features
     }
-    processed_data = process_geojson(data, config.confidence_threshold, config.area_threshold, height_data_path, rgbi_data_path)
+    processed_data = process_geojson(data, height_data_path, rgbi_data_path)
     
     new_schema = schema.copy()
     new_properties_schema = {
@@ -475,6 +442,8 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         'containment_ratio': 'float',
         'num_contained': 'int',
         'is_contained': 'str',
+        'Shape_complexity': 'float',
+        'Containment_coverage': 'float'
     }
     new_schema['properties'] = new_properties_schema
 

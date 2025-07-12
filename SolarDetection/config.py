@@ -6,29 +6,8 @@ from TreeDetection.config import load_config, set_device_configuration, setup_lo
 def get_config(config_path: str):
     """
     Load the configuration from the specified path.
-
-    Args:
-        config_path (str): Path to the configuration file. (should be a .yml file)
-
-    Returns:
-        dict: Configuration dictionary including the following keys:
-        - image_directory (str): Path to the directory containing the input images.
-        - height_data_path (str): Path to the nDOM data.
-        - combined_model (str): Path to the combined model. (or forrest_outline/forrest_model/urban_model)
-        - urban_model (str): Path to the urban model. (optional)
-        - forrest_model (str): Path to the forrest model. (optional)
-        - forrest_outline (str): Path to the forrest outline. (optional)    
-        - output_directory (str): Path to the output directory. (default: ./output)
-        - tiles_path (str): Path to the directory containing the tiles. (default: ./tiles)
-        - continue_path (str): Path to the continue file. (default: ./output/continue.yml)
-        - tile_width (int): Width of the tiles. (default: 50)
-        - tile_height (int): Height of the tiles. (default: 50)
-        - buffer (int): Buffer size for the tiles. (default: 0)
-        - exclude_files (list): List of files that contain shapes to exclude from the predictions, such as water bodies, infrastructure, buildings, ... . (default: [])
-        - confidence_threshold (float): Confidence threshold for the predictions. (default: 0.3)
-        - containment_threshold (float): Containment threshold for the predictions. (default: 0.9)
-        - height_threshold (float): Height threshold for the predictions. (default: 3)
     """
+
     config = load_config(config_path)
 
     # 1. Check file handling paths
@@ -92,7 +71,11 @@ def get_config(config_path: str):
     config["timestamped_output_directory"] = config.get("timestamped_output_directory", False)
     config["simplify_tolerance"] = config.get("simplify_tolerance", 0.2)
     
+    # 6. Solar panel specific parameters
     config["building_shapes"] = config.get("building_shapes", None)
+    best_threshold = max((config["buffer"] + config["tile_width"]) * (config["buffer"] + config["tile_height"]) *  (1/30), 50)
+    config["large_panels_threshold"] = config.get("large_panels_threshold", best_threshold)
+    config["outside_area_threshold"] = config.get("outside_area_threshold", 20)
 
     config_obj = Config()
     config_obj._load_into_config(config)

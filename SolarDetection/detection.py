@@ -1,9 +1,4 @@
 import os
-import sys
-
-# Add the root project directory to the system path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import datetime
 import time
 
@@ -73,7 +68,7 @@ def predict_tiles(config):
         pred_fold=os.path.join(config["output_directory"], "predictions"),
         output_path=folder,
         max_workers=config["num_workers"],
-        shift=1,
+        shift=0,
         simplify_tolerance=config['simplify_tolerance'],
         logger=config["logger"]
     )
