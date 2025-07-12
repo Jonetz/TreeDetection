@@ -17,6 +17,7 @@ from TreeDetection.postprocessing import process_files_in_directory
 from TreeDetection.prediction import Predictor
 from TreeDetection.preprocessing import tile_data
 from TreeDetection.recoveries import load_prediction_recovery_data, save_prediction_recovery_data
+from TreeDetection.utilities import free_gpu_memory
 
 gpd.options.display_precision = 2
 
@@ -195,7 +196,8 @@ def predict_tiles(config):
         )
         end = time.time()
         process_and_stitch_predictions_forrest_duration = end - start
-
+        
+        free_gpu_memory()
         logger.info("Predictions have been processed and stitched. Begin fusing the predictions.")
 
         # Step 4: Fusion based on forest outline

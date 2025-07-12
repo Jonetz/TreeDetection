@@ -12,6 +12,7 @@ import torch
 import yaml
 
 from TreeDetection.config import Config
+from TreeDetection.utilities import free_gpu_memory
 
 """
 Tiling orthomosaic data.
@@ -224,6 +225,7 @@ def tile_data(
                 logger.info(f"Tiling file {i + 1}/{total} ({current_percent}%)")
             process_file(data_path)
             
+    free_gpu_memory(device=device)
     save_recovery_data(file_list, buffer, tile_width, tile_height, logger, recovered_processed, file_list, os.path.join(out_dir, "recovery.yaml"))
 
 def load_recovery_data(file_list, buffer, tile_width, tile_height, logger, out_dir, recovery_file):    

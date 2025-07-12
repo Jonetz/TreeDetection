@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import cupy as cp
+import torch
 import yaml
 import geopandas as gpd
 
@@ -210,3 +211,22 @@ def calc_iou(shape1, shape2):
     """Calculate the IoU of two shapes."""
     iou = shape1.intersection(shape2).area / shape1.union(shape2).area
     return iou
+
+def free_gpu_memory(device=0):
+    """
+    Free up GPU memory by clearing the default memory pool.
+    This is useful to prevent memory leaks during long-running processes.
+    """
+
+    if not is_gpu_available():
+        return  # No GPU available, nothing to free
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear PyTorch's CUDA cache
+    if not cp.cuda.is_available():
+        return
+    else:
+        with cp.cuda.Device(device):
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+            cp.cuda.Stream.null.synchronize()  # Ensure all operations are completed before freeing memory

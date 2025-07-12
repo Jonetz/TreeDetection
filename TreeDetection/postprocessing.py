@@ -18,7 +18,7 @@ from shapely.geometry import shape, Polygon
 
 from TreeDetection.config import Config
 from TreeDetection.helpers import ndvi_array_from_rgbi, check_similarity_bounds, element_is_near_border
-from TreeDetection.utilities import geo_to_raster, raster_to_geo, is_point_in_polygon_batch, calculate_area, \
+from TreeDetection.utilities import free_gpu_memory, geo_to_raster, raster_to_geo, is_point_in_polygon_batch, calculate_area, \
     calculate_iou, round_coordinates, convert_to_python_types, get_centroids
 
 
@@ -1073,4 +1073,5 @@ def process_files_in_directory(directory, height_directory, image_directory, par
                 result = future.result()
                 if result is not None:
                     processed_files.add(result)
+    free_gpu_memory(device=device)
     save_recovery_data_with_params(directory, params, processed_files, logger=config_obj.logger)
