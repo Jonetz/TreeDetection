@@ -61,11 +61,8 @@ def merge_and_crop_images(config, images_paths, height_paths):
                     with rasterio.MemoryFile() as memfile:
                         with memfile.open(**merged_img_meta) as merged_src:
                             merged_src.write(merged_img)
-                            if rgbi:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(right_x_coord)}_{round(right_y_coord)}_{f_name_end}.tif"
-                            else:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(right_x_coord)}{round(right_y_coord)}_{f_name_end}.tif"
-                                # Perform cropping here
+                            output_filename = f"{round(f_x_coord)}_{round(f_y_coord)}_{round(right_x_coord)}_{round(right_y_coord)}.tif"
+                            # Perform cropping here
                             cropped_data, cropped_meta = crop_image(merged_src,
                                                                         (config["tile_width"] + 2 * config["buffer"]) *
                                                                         config["overlapping_tiles_width"],
@@ -90,11 +87,8 @@ def merge_and_crop_images(config, images_paths, height_paths):
                     with rasterio.MemoryFile() as memfile:
                         with memfile.open(**merged_img_meta) as merged_src:
                             merged_src.write(merged_img)
-                            if rgbi:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}_{round(f_y_coord)}_{round(down_x_coord)}_{round(down_y_coord)}_{f_name_end}.tif"
-                            else:
-                                output_filename = f"{f_basename}_{round(f_x_coord)}{round(f_y_coord)}{round(down_x_coord)}{round(down_y_coord)}_{f_name_end}.tif"
-                                # Perform cropping here
+                            output_filename = f"{round(f_x_coord)}_{round(f_y_coord)}_{round(down_x_coord)}_{round(down_y_coord)}.tif"
+                            # Perform cropping here
                             cropped_data, cropped_meta = crop_image(merged_src, merged_src.width,
                                                                         (config["tile_height"] + 2 * config["buffer"]) *
                                                                         config["overlapping_tiles_height"])

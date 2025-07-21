@@ -19,8 +19,6 @@ use_overlap: True                 # default: true
 merged_path: "merged"             # default: ./merged
 overlapping_tiles_width: 3        # default: 3
 overlapping_tiles_height: 3       # default: 3
-image_merged_regex: "FDOP20_(\\d+)_(\\d+)_(\\d+)_(\\d+)_rgbi\\.tif" # Image regex to identify the merged images, currently hardcoded to 4 digits, corresponding to both origin images
-height_data_merged_regex: "nDSM_(\\d+)(\\d+)_1km\\.tif"             # Corresponding height regex to associate the nDSM data of the merged images, again using hardcoded digits from the origin images
 
 # Tile parameters
 tile_width: 50    # default: 50
