@@ -7,7 +7,7 @@ Typically the installation of [Detectron](detectron2.readthedocs.io/en/latest/tu
 In order to install the Package & run the sample script, it is best to download the repository and work within the repository:
    ```bash
    git clone https://github.com/Jonetz/TreeDetection
-   cd Tree Detection
+   cd TreeDetection
    ```
 
 ### Ensuring GPU-Drivers are installed
