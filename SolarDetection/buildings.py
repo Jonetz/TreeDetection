@@ -231,7 +231,7 @@ def find_roof_solar(features, file, bounds):
     # Ensure preprocessing is done
     try:
         if not os.path.exists(index_path):
-            print("Preprocessed building chunks not found. Running preprocessing, this may take a while ...")
+            #print("Preprocessed building chunks not found. Running preprocessing, this may take a while ...")
             partition_geometries(file, index_dir, max_per_tile=10000)
     except Exception as e:
         print(f"[ERROR] Failed to partition geometries: {e}")
@@ -291,5 +291,5 @@ def load_tiles_for_prediction(index_path, prediction_geom):
     if dfs:
         return gpd.GeoDataFrame(pd.concat(dfs, ignore_index=True), crs=index_gdf.crs)
     else:
-        print("[INFO] No valid tiles loaded.")
+        #print("[INFO] No valid tiles loaded.")
         return gpd.GeoDataFrame(columns=["geometry"], crs=index_gdf.crs)
