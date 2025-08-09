@@ -206,8 +206,8 @@ def filter_height_slope(height_data_path, rgbi_data_path, filtered_features):
             '#{:02X}{:02X}{:02X}'.format(int(avg_rgb[0]), int(avg_rgb[1]), int(avg_rgb[2]))
             if None not in avg_rgb else None
         )
-        feature['properties']['Height'] = float(height) if height is not None else None
-        feature['properties']['Slope'] = float(slope) if slope is not None else None
+        feature['properties']['Height'] = float(height) if height is not None else -1
+        feature['properties']['Slope'] = float(slope) if slope is not None else -1
 
         polygon = shape(feature['geometry'])
 
@@ -337,7 +337,6 @@ def process_geojson(data: Dict, height_data_path: str, rgbi_data_path: str) -> D
     else:
         for feature in filtered_features:
             feature['properties']['In_building'] = None
-
     # Filter out features based on Rectangularity  
     for feature in filtered_features:
         polygon = shape(feature['geometry'])
@@ -356,10 +355,10 @@ def process_geojson(data: Dict, height_data_path: str, rgbi_data_path: str) -> D
     else:
         filtered_features = filter_height_slope(height_data_path, rgbi_data_path, filtered_features) #TODO: Add height and slope thresholds
         if hasattr(config, 'height_threshold'):
-            filtered_features = [feature for feature in filtered_features if feature['properties']['Height'] > config.height_threshold]
+            filtered_features = [feature for feature in filtered_features if feature['properties'].get('Height', -1) > config.height_threshold]
         if hasattr(config, 'outside_area_threshold'):
-            filtered_features = [feature for feature in filtered_features if not feature['properties']['In_Building'] \
-                                and feature['properties']['True_Area'] is not None and feature['properties']['True_Area'] > config.outside_area_threshold]
+            filtered_features = [feature for feature in filtered_features if feature['properties'].get('In_building', True) \
+                                or feature['properties'].get('True_Area', -1) > config.outside_area_threshold]
 
     # Filter out features based on Containment
     filtered_features = filter_containment(filtered_features, config.containment_threshold)
@@ -460,8 +459,8 @@ def process_single_file(file_path, processed_file_path, height_data_path, rgbi_d
         # Ensure properties are ordered correctly
         feature = order_properties(feature, new_properties_schema)
 
-        filtered_features.append(feature)
-
+        filtered_features.append(feature)    
+    config.logger.info(f'Processed {os.path.basename(file_path)} from {len(features)} to {len(filtered_features)}')
     # Write the filtered features to the new GeoJSON file
     with fiona.open(processed_file_path, 'w', driver='GPKG', schema=new_schema, crs=crs) as dest:
         for feature in filtered_features:
