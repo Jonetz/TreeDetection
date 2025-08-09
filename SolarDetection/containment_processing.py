@@ -9,13 +9,22 @@ from shapely.ops import unary_union
 
 def filter_containment(features, containment_threshold=0.5):
     """Recursively merge all contained polygons that fulfill the thresholds."""
-
     config = Config()
 
     updated_features = copy.deepcopy(features)
+    if not updated_features:
+        return []
+
     polygons = [shape(f['geometry']) for f in updated_features]
-    keep_flags = [True] * len(features)
+
+    # Filter out any polygons that failed to parse
+    polygons = [poly for poly in polygons if poly.is_valid and not poly.is_empty]
+    if not polygons:
+        return []
+
+    keep_flags = [True] * len(polygons)
     idx = index.Index((i, poly.bounds, None) for i, poly in enumerate(polygons))
+
 
     def should_merge(conf_a, conf_b, union_poly):
         if conf_a >= 0.99 and conf_b >= 0.99:
