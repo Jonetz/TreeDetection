@@ -984,6 +984,8 @@ def process_files_in_directory(directory, height_directory, image_directory, par
     if image_pattern is None:
         image_pattern = "(\\d+)\\.tif"
 
+    image_merged_pattern = "(\\d+)_(\\d+)_(\\d+)_(\\d+)\\.tif"
+    height_merged_pattern = "(\\d+)_(\\d+)_(\\d+)_(\\d+)\\.tif"
     
     image_merged_pattern = "(\\d+)_(\\d+)_(\\d+)_(\\d+)\\.tif"
     height_merged_pattern = "(\\d+)_(\\d+)_(\\d+)_(\\d+)\\.tif"
